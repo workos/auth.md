@@ -16,7 +16,7 @@ This repo includes sample implementations for both the agent provider and agent 
 
 ## Where to go next
 
-- **You're an agent** → [AUTH.md](AUTH.md) — procedural recipe (discover → register → claim → use → handle revoke).
+- **You're an agent or want an auth.md template** → [AUTH.md](AUTH.md) — procedural recipe (discover → register → claim → use → handle revoke).
 - **You're implementing a service** → [agent-services/README.md](agent-services/README.md) — full implementation guide, sequence diagrams, error tables.
 - **You're implementing an IdP** → [agent-providers/README.md](agent-providers/README.md) — minting ID-JAGs, publishing JWKS, sending revocation events.
 

@@ -105,7 +105,19 @@ Before sending: cross-check your choice against the `agent_auth` block. If the m
 
 ## Step 3 — Register
 
+Before sending an `identity_assertion` (either variant), surface the service's `resource_name` and `resource_logo_uri` (from Step 1a) and the scope set you'll be acting under, and confirm with the user. This is the user's only consent gate before their identity is asserted to the service. Skip this for `anonymous` — there is no user identity to assert.
+
 ### identity_assertion + id-jag
+
+Before minting the ID-JAG, confirm your provider is on this service's trust list (publishing format is service-specific — check the AS metadata or service docs). If it isn't, fall back to `identity_assertion + email` or `anonymous`.
+
+Mint the assertion with:
+
+- `aud` = the `resource` from the PRM
+- `iss` = your provider's issuer URL (must be on the trust list above)
+- `email_verified: true` OR `phone_number_verified: true`
+- Fresh `jti`
+- Near-term `exp` (~5 minutes)
 
 ```http
 POST /agent/auth
@@ -161,7 +173,7 @@ Response (200):
 }
 ```
 
-There is no credential yet. The service has already emailed the user. Keep `claim_token` and go to [Step 4](#step-4--claim-ceremony).
+There is no credential yet. The service has already emailed the user. Keep `claim_token` and go to [Step 4](#step-4--claim-ceremony). `claim_token` is returned exactly once — hold it in memory for the duration of the ceremony; do not persist it past Step 4.
 
 ### anonymous
 
@@ -192,7 +204,7 @@ Response (200):
 }
 ```
 
-You have a usable credential immediately at pre-claim scopes. If you also want a human to take ownership and unlock `post_claim_scopes`, go to [Step 4](#step-4--claim-ceremony). Otherwise skip to [Step 5](#step-5--use-the-credential).
+You have a usable credential immediately at pre-claim scopes. If you also want a human to take ownership and unlock `post_claim_scopes`, go to [Step 4](#step-4--claim-ceremony). Otherwise skip to [Step 5](#step-5--use-the-credential). `claim_token` is returned exactly once — hold it in memory for the duration of the ceremony; do not persist it past Step 4.
 
 ## Step 4 — Claim ceremony
 
@@ -227,7 +239,9 @@ Response (200):
 
 The user receives an email, clicks the link, sees a 6-digit OTP, reads it back to you. Surface this in your agent UI:
 
-> "Check your email and tell me the 6-digit code."
+- Default ask: "Check your email and tell me the 6-digit code."
+- If the user pastes the URL back instead of the code: "Open the link in your browser — the page will show a 6-digit code. Read it back to me."
+- If the code is rejected: "That code didn't work — re-read it carefully, or open the email link again for a fresh one."
 
 ### 4c. Submit the OTP
 
@@ -279,6 +293,8 @@ Authorization: Bearer <credential>
 
 If you get a 401 on a previously-working credential: drop it, restart at [Step 1](#step-1--discover). Do not stash the credential and retry.
 
+Full API reference: `https://docs.service.com/`.
+
 ## Errors
 
 | Code                          | Where                        | What to do                                                                             |
@@ -297,6 +313,12 @@ If you get a 401 on a previously-working credential: drop it, restart at [Step 1
 | `otp_expired`                 | `/agent/auth/claim/complete` | OTP window passed. Re-trigger the claim email (Step 4a) or restart at Step 3.          |
 | `claim_expired`               | `/agent/auth/claim/complete` | The whole registration expired. Restart at Step 3.                                     |
 | `previously_claimed`          | `/agent/auth/claim/complete` | Someone already finished this claim. Restart at Step 3 if you need a fresh credential. |
+
+Retry policy:
+
+- 5xx → exponential backoff, retry the same request.
+- 4xx → do not retry the same payload; act on the table above.
+- 401 on a previously-working credential → drop the credential and restart at [Step 1](#step-1--discover).
 
 ## Revocation
 
