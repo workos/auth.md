@@ -17,6 +17,11 @@ export const config = Object.freeze({
   claimViewTokenTtlSeconds: 600,
   otpTtlSeconds: 600,
   clockSkewSeconds: 60,
+  // Maximum age of the upstream user authentication carried in an ID-JAG's
+  // auth_time claim. Tokens whose underlying login is older than this are
+  // rejected; the agent should refresh the user's session at its provider
+  // and request a fresh ID-JAG.
+  idJagMaxAuthAgeSeconds: 3600,
   corsOrigins: [providerUrl],
   mailDir: ".mail",
   mailUrlPath: "/mail",

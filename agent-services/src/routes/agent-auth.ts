@@ -15,6 +15,7 @@ import {
   completeClaim,
   createAnonymousRegistration,
   createEmailVerificationRegistration,
+  createIdJagStepUpRegistration,
   credentials,
   findRegistrationByClaimHash,
   findRegistrationByClaimViewHash,
@@ -85,7 +86,55 @@ async function handleIdJagAssertion(
     return;
   }
   const { claims } = verified;
-  const { user } = matchOrProvision(claims);
+  const matchResult = matchOrProvision(claims);
+
+  if (matchResult.kind === "step_up_required") {
+    // First-time (iss, sub) matched an existing user by email or phone. Don't
+    // bind the delegation yet — initiate the OTP claim ceremony so the user
+    // proves ownership. The matched user already has an email on file; for
+    // phone-match we send the OTP there too since this demo has no SMS.
+    const recipient = matchResult.matched_user.email;
+    const { registration, claimTokenPlaintext, claimViewTokenPlaintext } =
+      createIdJagStepUpRegistration({
+        iss: claims.iss,
+        sub: claims.sub,
+        aud: claims.aud,
+        email: recipient,
+        requestedCredentialType: body.requested_credential_type,
+      });
+    const viewUrl = `${config.baseUrl}/agent/auth/claim/view?token=${encodeURIComponent(claimViewTokenPlaintext)}`;
+    await sendClaimViewEmail({
+      registrationId: registration.id,
+      recipientEmail: recipient,
+      viewUrl,
+      expiresAt: registration.claim_view_expires_at!,
+    });
+    console.log(
+      `[agent-auth] step-up required for iss=${claims.iss} sub=${claims.sub} via=${matchResult.via}; registration=${registration.id}`,
+    );
+    res
+      .status(401)
+      .set(
+        "WWW-Authenticate",
+        `AgentAuth error="interaction_required", error_description="ID-JAG matches existing account; OTP confirmation required"`,
+      )
+      .json({
+        error: "interaction_required",
+        message:
+          matchResult.via === "email"
+            ? "This ID-JAG matches an existing account by email. Confirm ownership by completing the OTP claim flow."
+            : "This ID-JAG matches an existing account by phone number. Confirm ownership by completing the OTP claim flow.",
+        registration_id: registration.id,
+        registration_type: "id-jag-step-up",
+        claim_url: `${config.baseUrl}/agent/auth/claim`,
+        claim_token: claimTokenPlaintext,
+        claim_token_expires: registration.expires_at.toISOString(),
+        post_claim_scopes: config.scopesSupported,
+      });
+    return;
+  }
+
+  const { user } = matchResult;
   const scope = config.scopesSupported;
 
   const registrationId = `reg_${sha256Hex(`${claims.iss}|${claims.sub}|${claims.aud}`).slice(0, 22)}`;
@@ -254,7 +303,7 @@ agentAuthRouter.post("/agent/auth/claim", async (req, res) => {
 
   res.json({
     registration_id: registration.id,
-    claim_attempt_id: registration.id,
+    claim_attempt_id: registration.claim_attempt_id!,
     status: "initiated",
     expires_at: registration.claim_view_expires_at!.toISOString(),
   });
@@ -375,10 +424,14 @@ function buildCompleteResponse(
     registration_id: registration.id,
     status: "claimed",
   };
-  // Only email-verification registrations receive a fresh credential at
-  // /complete. Anonymous registrations get an in-place scope upgrade on
-  // their existing API key — same key, wider scopes.
-  if (credential && registration.kind === "email_verification") {
+  // Email-verification and id_jag_step_up registrations receive a fresh
+  // credential at /complete. Anonymous registrations get an in-place scope
+  // upgrade on their existing API key — same key, wider scopes.
+  if (
+    credential &&
+    (registration.kind === "email_verification" ||
+      registration.kind === "id_jag_step_up")
+  ) {
     base.credential_type = credential.type;
     base.credential = credential.token;
     base.credential_expires = credential.expires_at?.toISOString() ?? null;

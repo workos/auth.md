@@ -12,6 +12,8 @@ export type VerifyError = {
     | "invalid_audience"
     | "invalid_client_id"
     | "missing_verified_email"
+    | "auth_time_missing"
+    | "auth_time_too_old"
     | "invalid_request";
   message: string;
 };
@@ -28,6 +30,7 @@ export type IdJagClaims = JWTPayload & {
   phone_number_verified?: boolean;
   name?: string;
   amr?: string[];
+  auth_time?: number;
   agent_platform?: string;
   agent_context_id?: string;
 };
@@ -108,6 +111,32 @@ export async function verifyIdJag(
       },
     };
   }
+
+  // Freshness-of-authentication check: a token with an old auth_time means
+  // the user logged in long ago at the provider, even if the token itself
+  // was minted recently. Reject so the agent refreshes upstream rather than
+  // riding a stale session.
+  if (typeof claims.auth_time !== "number") {
+    return {
+      ok: false,
+      error: {
+        code: "auth_time_missing",
+        message: "ID-JAG must include an auth_time claim.",
+      },
+    };
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const authAge = nowSec - claims.auth_time;
+  if (authAge > config.idJagMaxAuthAgeSeconds + config.clockSkewSeconds) {
+    return {
+      ok: false,
+      error: {
+        code: "auth_time_too_old",
+        message: `auth_time is ${authAge}s old; max allowed is ${config.idJagMaxAuthAgeSeconds}s. Re-authenticate at the provider and request a fresh ID-JAG.`,
+      },
+    };
+  }
+
   const replay = recordJti(
     claims.jti,
     claims.exp ?? Math.floor(Date.now() / 1000) + 300,

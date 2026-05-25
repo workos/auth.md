@@ -20,6 +20,10 @@ sessionRouter.post("/login", (req, res) => {
     return;
   }
 
+  // Freshen auth_time so downstream resource servers can enforce a max_age
+  // on the upstream authentication via the ID-JAG's auth_time claim.
+  user.auth_time = new Date();
+
   const session = createSession(user.id);
   res.json({ session_token: session.token, user });
 });

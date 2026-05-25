@@ -9,10 +9,9 @@ import {
   users,
 } from "./store.js";
 
-export type MatchResult = {
-  user: User;
-  match: "delegation" | "email" | "phone" | "jit";
-};
+export type MatchResult =
+  | { kind: "match"; user: User; match: "delegation" | "jit" }
+  | { kind: "step_up_required"; via: "email" | "phone"; matched_user: User };
 
 export function matchOrProvision(claims: IdJagClaims): MatchResult {
   const { iss, sub } = claims;
@@ -22,23 +21,26 @@ export function matchOrProvision(claims: IdJagClaims): MatchResult {
     const user = users.get(existingDelegation.user_id);
     if (user) {
       upsertDelegation(iss, sub, user.id);
-      return { user, match: "delegation" };
+      return { kind: "match", user, match: "delegation" };
     }
   }
 
+  // Email- or phone-match against an existing account requires the user to
+  // prove ownership via OTP before we bind a new (iss, sub) delegation.
+  // Without this gate any trusted provider could mint an ID-JAG with
+  // email_verified/phone_number_verified set for a victim's identifier and
+  // take over the victim's account at this service.
   if (claims.email && claims.email_verified) {
     const byEmail = findUserByEmail(claims.email);
     if (byEmail) {
-      upsertDelegation(iss, sub, byEmail.id);
-      return { user: byEmail, match: "email" };
+      return { kind: "step_up_required", via: "email", matched_user: byEmail };
     }
   }
 
   if (claims.phone_number && claims.phone_number_verified) {
     const byPhone = findUserByPhone(claims.phone_number);
     if (byPhone) {
-      upsertDelegation(iss, sub, byPhone.id);
-      return { user: byPhone, match: "phone" };
+      return { kind: "step_up_required", via: "phone", matched_user: byPhone };
     }
   }
 
@@ -50,5 +52,5 @@ export function matchOrProvision(claims: IdJagClaims): MatchResult {
     name: claims.name,
   });
   upsertDelegation(iss, sub, user.id);
-  return { user, match: "jit" };
+  return { kind: "match", user, match: "jit" };
 }
