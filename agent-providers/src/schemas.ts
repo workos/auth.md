@@ -7,7 +7,7 @@ export const loginBody = z.object({
 export const createGrantBody = z.object({
   audience: z.url(),
   mode: z.enum(["once", "always"]),
-  revocation_uri: z.url().optional(),
+  events_uri: z.url().optional(),
 });
 
 export const mintIdJagBody = z.object({

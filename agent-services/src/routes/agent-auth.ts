@@ -590,7 +590,7 @@ function escapeHtml(s: string): string {
 // schemas are tolerated (RFC 8417 §2.2 doesn't require receivers to handle
 // every event type).
 const SET_EVENT_HANDLERS: Record<string, (claims: SetClaims) => void> = {
-  "https://schemas.workos.com/events/agent/auth/identity/assertion/revoked": (
+  "https://schemas.workos.com/events/agent/identity/assertion/revoked": (
     claims,
   ) => {
     const count = revokeForDelegation(

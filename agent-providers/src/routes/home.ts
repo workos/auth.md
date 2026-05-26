@@ -93,8 +93,8 @@ function renderHtml(seeded: { email: string; name: string }[]): string {
       <option value="once">once — marked consumed on first mint</option>
     </select>
   </label>
-  <label>Revocation URI (optional)
-    <input id="grant-revoke" value="${config.consumerUrl}/agent/event/notify" placeholder="${config.consumerUrl}/agent/event/notify">
+  <label>Events URI (optional)
+    <input id="grant-events" value="${config.consumerUrl}/agent/event/notify" placeholder="${config.consumerUrl}/agent/event/notify">
   </label>
   <div class="label">Request</div>
   <div class="req" id="grant-req"><pre></pre></div>
@@ -139,7 +139,7 @@ function renderHtml(seeded: { email: string; name: string }[]): string {
 
 <section id="step-6" hidden>
   <h2><span class="num">6</span>Revoke grant</h2>
-  <p>Deleting a grant removes it locally. If a <code>revocation_uri</code> was recorded, the provider first POSTs a Security Event Token (<code>application/secevent+jwt</code>) there carrying an <code>identity-assertion-revoked</code> event; if the call fails, the grant is retained and the endpoint returns 500. Any credentials the consumer issued for this delegation are invalidated.</p>
+  <p>Deleting a grant removes it locally. If an <code>events_uri</code> was recorded, the provider first POSTs a Security Event Token (<code>application/secevent+jwt</code>) there carrying an <code>identity-assertion-revoked</code> event; if the call fails, the grant is retained and the endpoint returns 500. Any credentials the consumer issued for this delegation are invalidated.</p>
   <div class="label">Request</div>
   <div class="req" id="revoke-req"><pre></pre></div>
   <button class="primary" type="button" data-action="revoke">Revoke</button>
@@ -226,8 +226,8 @@ function updateGrantPreview() {
     audience: document.getElementById("grant-audience").value,
     mode: document.getElementById("grant-mode").value,
   };
-  const rev = document.getElementById("grant-revoke").value.trim();
-  if (rev) body.revocation_uri = rev;
+  const events = document.getElementById("grant-events").value.trim();
+  if (events) body.events_uri = events;
   document.querySelector("#grant-req pre").textContent =
     "POST /grants\\nAuthorization: Bearer <session>\\n\\n" + jsonStr(body);
 }
@@ -295,8 +295,8 @@ async function grant() {
     audience: document.getElementById("grant-audience").value,
     mode: document.getElementById("grant-mode").value,
   };
-  const rev = document.getElementById("grant-revoke").value.trim();
-  if (rev) body.revocation_uri = rev;
+  const events = document.getElementById("grant-events").value.trim();
+  if (events) body.events_uri = events;
 
   const r = await jsonFetch("/grants", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("grant-out").innerHTML = resBlock(r.status, r.body, r.ok);

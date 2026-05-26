@@ -28,7 +28,7 @@ export type Grant = {
   created_at: Date;
   expires_at: Date;
   consumed_at?: Date;
-  revocation_uri?: string;
+  events_uri?: string;
 };
 
 function addSeconds(base: Date, seconds: number): Date {
@@ -95,14 +95,14 @@ export function upsertGrant(input: {
   userId: string;
   audience: string;
   mode: GrantMode;
-  revocationUri?: string;
+  eventsUri?: string;
 }): Grant {
   const now = new Date();
   const existing = findGrantForAudience(input.userId, input.audience);
   if (existing) {
     existing.mode = input.mode;
     existing.expires_at = addSeconds(now, config.consentTtlSeconds);
-    if (input.revocationUri) existing.revocation_uri = input.revocationUri;
+    if (input.eventsUri) existing.events_uri = input.eventsUri;
     return existing;
   }
   const grant: Grant = {
@@ -112,7 +112,7 @@ export function upsertGrant(input: {
     mode: input.mode,
     created_at: now,
     expires_at: addSeconds(now, config.consentTtlSeconds),
-    revocation_uri: input.revocationUri,
+    events_uri: input.eventsUri,
   };
   grants.set(grant.id, grant);
   return grant;

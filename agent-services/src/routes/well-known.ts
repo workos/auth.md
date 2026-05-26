@@ -41,7 +41,7 @@ wellKnownRouter.get("/.well-known/oauth-authorization-server", (_req, res) => {
         ],
       },
       events_supported: [
-        "https://schemas.workos.com/events/agent/auth/identity/assertion/revoked",
+        "https://schemas.workos.com/events/agent/identity/assertion/revoked",
       ],
     },
   });
