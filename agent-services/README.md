@@ -205,7 +205,7 @@ Implementation steps:
 6. **Match or provision the user** (see [User Matching and JIT Provisioning](#user-matching-and-jit-provisioning)).
 7. **Mint a service-signed identity_assertion** (typed `oauth-id-jag+jwt`, signed by your AS key, with `sub` = the registration ID). This is what the agent will exchange at `/oauth2/token`.
 
-Successful response:
+Successful response (identity settled — happy path):
 
 ```json
 {
@@ -218,6 +218,20 @@ Successful response:
 ```
 
 The agent then POSTs the `identity_assertion` to [`/oauth2/token`](#post-oauth2token--rfc-7523-jwt-bearer-grant) to obtain an access_token. No credential is issued at `/agent/register` itself.
+
+Successful response (claim required — ID-JAG step-up):
+
+```json
+{
+  "registration_id": "reg_...",
+  "registration_type": "id-jag-step-up",
+  "claim_url": "/agent/register/claim",
+  "claim_token": "clm_...",
+  "claim_token_expires": "2026-05-21T17:31:25.994Z"
+}
+```
+
+Return this branch when the matcher resolves to an existing user by email/phone but `(iss, sub)` has never been linked before, or when the asserted email's domain is enterprise-SSO-managed and your policy doesn't accept a bare provider assertion for it. The agent walks the user through the OTP ceremony at `/agent/register/claim/complete`, which then returns a fresh `identity_assertion`. See [OTP Claim Flow](#otp-claim-flow). The agent's recovery loop is identical to the verified-email flow — no custom 401 needed.
 
 Error response (400):
 
@@ -409,6 +423,8 @@ Implementation notes:
 Called by the user's browser when it renders the claim page, **not by the agent**. The user lands on the service's claim page from the email link; the page POSTs the `claim_attempt_token` (from the URL) to this endpoint to mint a short-lived OTP and display it.
 
 Gating OTP minting behind a POST keeps the email link safe to fetch — link-preview scanners and accidental refreshes don't burn codes. Production deployments should gate this endpoint with a HAK session (or equivalent user-binding signal) so only the legitimate user can trigger a mint.
+
+**SSO-bypass gate.** The claim page (and the POST that mints the OTP) is the service's policy choke-point for the entire `auth.md` flow. Any condition you'd normally enforce in an interactive browser sign-in — enterprise SSO, MFA, bot detection, terms re-acceptance, just-in-time provisioning checks — belongs here, before the OTP is displayed. This is what prevents an ID-JAG from bypassing your domain-bound policies: if `acme.com` is enterprise-SSO-managed in your tenant, an ID-JAG asserting `alice@acme.com` from a provider Acme doesn't federate should land on a claim page that refuses to mint the OTP until Alice signs in through Acme's IdP. The agent sees none of this — it polls until the user reads back a code. From the agent's perspective the flow is identical whether the gate is "no gate," "MFA," or "full enterprise SSO."
 
 Request:
 

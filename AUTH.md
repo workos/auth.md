@@ -134,7 +134,9 @@ Content-Type: application/json
 }
 ```
 
-Response (200):
+Two response shapes are possible. The service either mints the identity assertion immediately or requires the user to walk a claim ceremony first.
+
+**Happy path (200) — identity settled:**
 
 ```json
 {
@@ -145,7 +147,21 @@ Response (200):
 }
 ```
 
-The service verified your ID-JAG and minted a service-signed identity assertion bound to the registration. Keep `identity_assertion` and go to [Step 5](#step-5--exchange-the-assertion).
+Keep `identity_assertion` and go to [Step 5](#step-5--exchange-the-assertion).
+
+**Claim required (200) — ID-JAG step-up:**
+
+```json
+{
+  "registration_id": "reg_...",
+  "registration_type": "id-jag-step-up",
+  "claim_url": "https://auth.service.com/agent/register/claim",
+  "claim_token": "clm_...",
+  "claim_token_expires": "2026-05-21T17:31:25.994Z"
+}
+```
+
+The service matched your ID-JAG's identity to an existing account (by email or phone) but that account has never been linked to your provider, or the asserted email's domain has a policy (e.g., enterprise SSO) that conflicts with bare provider assertion. Either way: the service is requiring the user to confirm ownership through the OTP ceremony before binding the delegation. The service has already emailed the user. Keep `claim_token` and go to [Step 4](#step-4--claim-ceremony). `claim_token` is returned exactly once — hold it in memory; do not persist past Step 4.
 
 ### identity_assertion + email
 
