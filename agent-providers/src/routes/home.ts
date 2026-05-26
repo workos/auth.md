@@ -94,7 +94,7 @@ function renderHtml(seeded: { email: string; name: string }[]): string {
     </select>
   </label>
   <label>Revocation URI (optional)
-    <input id="grant-revoke" value="${config.consumerUrl}/agent/auth/revoke" placeholder="${config.consumerUrl}/agent/auth/revoke">
+    <input id="grant-revoke" value="${config.consumerUrl}/agent/event/notify" placeholder="${config.consumerUrl}/agent/event/notify">
   </label>
   <div class="label">Request</div>
   <div class="req" id="grant-req"><pre></pre></div>
@@ -129,7 +129,7 @@ function renderHtml(seeded: { email: string; name: string }[]): string {
 
 <section id="step-5" hidden>
   <h2><span class="num">5</span>Exchange for an identity_assertion at the consumer</h2>
-  <p>With a valid ID-JAG, the agent POSTs it to the consumer's <code>/agent/auth</code> endpoint. The consumer verifies the signature against <em>this</em> provider's JWKS, matches or provisions a user, and returns a service-signed <code>identity_assertion</code>. The agent then trades that assertion at the consumer's <code>/oauth2/token</code> (RFC 7523 JWT-bearer) for an access_token and calls <code>/api/resource</code>. Requires the consumer sample running at the audience URL.</p>
+  <p>With a valid ID-JAG, the agent POSTs it to the consumer's <code>/agent/register</code> endpoint. The consumer verifies the signature against <em>this</em> provider's JWKS, matches or provisions a user, and returns a service-signed <code>identity_assertion</code>. The agent then trades that assertion at the consumer's <code>/oauth2/token</code> (RFC 7523 JWT-bearer) for an access_token and calls <code>/api/resource</code>. Requires the consumer sample running at the audience URL.</p>
   <div class="label">Request</div>
   <div class="req" id="exchange-req"><pre></pre></div>
   <button class="primary" type="button" data-action="exchange">Exchange at consumer</button>
@@ -251,7 +251,7 @@ function updateExchangePreview() {
   const aud = state.audience || document.getElementById("grant-audience").value;
   const assertionHint = state.assertion ? state.assertion.slice(0, 40) + "..." : "eyJhbGc...";
   document.querySelector("#exchange-req pre").textContent =
-    "POST " + aud + "/agent/auth\\nContent-Type: application/json\\n\\n" + jsonStr({
+    "POST " + aud + "/agent/register\\nContent-Type: application/json\\n\\n" + jsonStr({
       type: "identity_assertion",
       assertion_type: "urn:ietf:params:oauth:token-type:id-jag",
       assertion: assertionHint,
@@ -365,7 +365,7 @@ async function exchange() {
   };
   let r;
   try {
-    const resp = await fetch(state.audience + "/agent/auth", {
+    const resp = await fetch(state.audience + "/agent/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

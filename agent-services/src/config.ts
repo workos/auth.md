@@ -24,6 +24,12 @@ export const config = Object.freeze({
   tokenEndpointPath: "/oauth2/token",
   // Token revocation endpoint path (RFC 7009).
   revocationEndpointPath: "/oauth2/revoke",
+  // Agent registration endpoint (profile extension).
+  registrationEndpointPath: "/agent/register",
+  // Claim ceremony endpoint, nested under register.
+  claimEndpointPath: "/agent/register/claim",
+  // SET receiver endpoint (RFC 8935 push-based delivery).
+  eventsEndpointPath: "/agent/event/notify",
   // The client_id claim on service-signed identity_assertions. Recommended
   // forms: agent CIMD URL when enrolled, an OAuth client_id from the
   // service's client registry, or a URN sentinel like this one.

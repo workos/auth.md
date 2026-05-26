@@ -126,7 +126,7 @@ function renderHtml(): string {
   <h2><span class="num">3</span>Register anonymously</h2>
   <p>An agent without a user identity POSTs <code>{ "type": "anonymous" }</code>. The service returns an <code>identity_assertion</code> (a service-signed ID-JAG) plus a <code>claim_token</code> for the human-handoff ceremony. No credential yet — the agent will exchange the assertion at <code>/oauth2/token</code> next.</p>
   <div class="label">Request</div>
-  <div class="req"><pre>POST /agent/auth
+  <div class="req"><pre>POST /agent/register
 Content-Type: application/json
 
 { "type": "anonymous" }</pre></div>
@@ -143,7 +143,7 @@ Content-Type: application/json
 
 <section id="step-5" class="track-anon" hidden>
   <h2><span class="num">5</span>Send the claim email</h2>
-  <p>The agent invites a human to take ownership. <code>POST /agent/auth/claim</code> records the request and sends an email containing a <code>claim_attempt_token</code> URL (written to <code>agent-services/.mail/&lt;registration_id&gt;.html</code>, served at <code>/mail/&lt;registration_id&gt;.html</code>).</p>
+  <p>The agent invites a human to take ownership. <code>POST /agent/register/claim</code> records the request and sends an email containing a <code>claim_attempt_token</code> URL (written to <code>agent-services/.mail/&lt;registration_id&gt;.html</code>, served at <code>/mail/&lt;registration_id&gt;.html</code>).</p>
   <label>Claiming user email
     <input id="anon-claim-email" value="alice@example.com">
   </label>
@@ -155,13 +155,13 @@ Content-Type: application/json
 
 <section id="step-6" class="track-anon" hidden>
   <h2><span class="num">6</span>User opens the email and reads the OTP</h2>
-  <p>The user clicks the link in the email and lands on <code>/agent/auth/claim/view</code>. The page POSTs the <code>claim_attempt_token</code> to <code>/agent/auth/claim/attempt/challenge</code>, which mints a 6-digit OTP that the page displays. They read the code back to the agent.</p>
+  <p>The user clicks the link in the email and lands on <code>/agent/register/claim/view</code>. The page POSTs the <code>claim_attempt_token</code> to <code>/agent/register/claim/attempt/challenge</code>, which mints a 6-digit OTP that the page displays. They read the code back to the agent.</p>
   <div id="anon-mail-link"></div>
 </section>
 
 <section id="step-7" class="track-anon" hidden>
   <h2><span class="num">7</span>Complete the claim</h2>
-  <p>The agent POSTs the OTP it heard from the user to <code>/agent/auth/claim/complete</code>. The pre-claim access_token keeps working — its scopes are upgraded in place on the credential issued in step 4.</p>
+  <p>The agent POSTs the OTP it heard from the user to <code>/agent/register/claim/complete</code>. The pre-claim access_token keeps working — its scopes are upgraded in place on the credential issued in step 4.</p>
   <label>OTP from user
     <input id="anon-otp" class="otp" placeholder="123456" maxlength="6">
   </label>
@@ -185,7 +185,7 @@ Content-Type: application/json
 
 <section id="step-9" class="track-email" hidden>
   <h2><span class="num">9</span>Register with an email assertion</h2>
-  <p>The agent already has the user's email but no provider-signed assertion. It POSTs <code>/agent/auth</code> with <code>assertion_type: verified_email</code>. The service mails the user immediately and returns a claim_token, but no credential yet.</p>
+  <p>The agent already has the user's email but no provider-signed assertion. It POSTs <code>/agent/register</code> with <code>assertion_type: verified_email</code>. The service mails the user immediately and returns a claim_token, but no credential yet.</p>
   <label>User email
     <input id="email-assertion" value="alice@example.com">
   </label>
@@ -203,7 +203,7 @@ Content-Type: application/json
 
 <section id="step-11" class="track-email" hidden>
   <h2><span class="num">11</span>Complete the claim, receive an identity_assertion</h2>
-  <p>The agent POSTs the OTP to <code>/agent/auth/claim/complete</code>. The service marks the registration claimed and returns a service-signed <code>identity_assertion</code> the agent will exchange for a credential next.</p>
+  <p>The agent POSTs the OTP to <code>/agent/register/claim/complete</code>. The service marks the registration claimed and returns a service-signed <code>identity_assertion</code> the agent will exchange for a credential next.</p>
   <label>OTP from user
     <input id="email-otp" class="otp" placeholder="123456" maxlength="6">
   </label>
@@ -244,7 +244,7 @@ Content-Type: application/json
   <div class="req" id="call-req"><pre></pre></div>
   <button class="primary" type="button" data-action="call">Exchange &amp; call</button>
   <div id="call-out"></div>
-  <p class="note" style="margin-top:1rem">Revocation is driven from the provider side — see the provider demo's step 7. When the provider POSTs a <code>logout+jwt</code> to this consumer's <code>/agent/auth/revoke</code>, credentials for that <code>(iss, sub, aud)</code> are marked revoked. Re-clicking the call button will start returning 401.</p>
+  <p class="note" style="margin-top:1rem">Revocation is driven from the provider side — see the provider demo's step 7. When the provider POSTs a <code>logout+jwt</code> to this consumer's <code>/agent/event/notify</code>, credentials for that <code>(iss, sub, aud)</code> are marked revoked. Re-clicking the call button will start returning 401.</p>
 </section>
 </div>
 </div>
@@ -297,7 +297,7 @@ function updateExchangePreview() {
     assertion: (document.getElementById("assertion").value || "eyJhbGc...").slice(0, 40) + "...",
   };
   document.querySelector("#exchange-req pre").textContent =
-    "POST /agent/auth\\nContent-Type: application/json\\n\\n" + jsonStr(body);
+    "POST /agent/register\\nContent-Type: application/json\\n\\n" + jsonStr(body);
 }
 function updateCallPreview() {
   const tok = state.credential ? state.credential.slice(0, 16) + "..." : "<credential>";
@@ -310,7 +310,7 @@ function updateAnonClaimPreview() {
     email: document.getElementById("anon-claim-email").value,
   };
   document.querySelector("#anon-claim-req pre").textContent =
-    "POST /agent/auth/claim\\nContent-Type: application/json\\n\\n" + jsonStr(body);
+    "POST /agent/register/claim\\nContent-Type: application/json\\n\\n" + jsonStr(body);
 }
 function updateAnonCompletePreview() {
   const body = {
@@ -318,7 +318,7 @@ function updateAnonCompletePreview() {
     otp: document.getElementById("anon-otp").value || "<otp>",
   };
   document.querySelector("#anon-complete-req pre").textContent =
-    "POST /agent/auth/claim/complete\\nContent-Type: application/json\\n\\n" + jsonStr(body);
+    "POST /agent/register/claim/complete\\nContent-Type: application/json\\n\\n" + jsonStr(body);
 }
 function updateEmailRegisterPreview() {
   const body = {
@@ -327,7 +327,7 @@ function updateEmailRegisterPreview() {
     assertion: document.getElementById("email-assertion").value,
   };
   document.querySelector("#email-register-req pre").textContent =
-    "POST /agent/auth\\nContent-Type: application/json\\n\\n" + jsonStr(body);
+    "POST /agent/register\\nContent-Type: application/json\\n\\n" + jsonStr(body);
 }
 function updateEmailCompletePreview() {
   const body = {
@@ -335,7 +335,7 @@ function updateEmailCompletePreview() {
     otp: document.getElementById("email-otp").value || "<otp>",
   };
   document.querySelector("#email-complete-req pre").textContent =
-    "POST /agent/auth/claim/complete\\nContent-Type: application/json\\n\\n" + jsonStr(body);
+    "POST /agent/register/claim/complete\\nContent-Type: application/json\\n\\n" + jsonStr(body);
 }
 
 document.getElementById("assertion").addEventListener("input", updateExchangePreview);
@@ -429,7 +429,7 @@ function tokenAndResourceBlocks(tokResp, resResp) {
 }
 
 async function anonRegister() {
-  const r = await jsonFetch("/agent/auth", {
+  const r = await jsonFetch("/agent/register", {
     method: "POST",
     body: JSON.stringify({ type: "anonymous" }),
   });
@@ -463,7 +463,7 @@ async function anonClaim() {
     claim_token: state.anon_claim_token,
     email: document.getElementById("anon-claim-email").value,
   };
-  const r = await jsonFetch("/agent/auth/claim", { method: "POST", body: JSON.stringify(body) });
+  const r = await jsonFetch("/agent/register/claim", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("anon-claim-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
   const mailUrl = "/mail/" + state.anon_registration_id + ".html";
@@ -478,7 +478,7 @@ async function anonClaim() {
 async function anonComplete() {
   const otp = document.getElementById("anon-otp").value.trim();
   const body = { claim_token: state.anon_claim_token, otp };
-  const r = await jsonFetch("/agent/auth/claim/complete", { method: "POST", body: JSON.stringify(body) });
+  const r = await jsonFetch("/agent/register/claim/complete", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("anon-complete-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
   markDone("step-6");
@@ -501,7 +501,7 @@ async function emailRegister() {
     assertion_type: "verified_email",
     assertion: email,
   };
-  const r = await jsonFetch("/agent/auth", { method: "POST", body: JSON.stringify(body) });
+  const r = await jsonFetch("/agent/register", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("email-register-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
   state.email_claim_token = r.body.claim_token;
@@ -519,7 +519,7 @@ async function emailRegister() {
 async function emailComplete() {
   const otp = document.getElementById("email-otp").value.trim();
   const body = { claim_token: state.email_claim_token, otp };
-  const r = await jsonFetch("/agent/auth/claim/complete", { method: "POST", body: JSON.stringify(body) });
+  const r = await jsonFetch("/agent/register/claim/complete", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("email-complete-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
   state.email_identity_assertion = r.body.identity_assertion;
@@ -554,7 +554,7 @@ async function exchange() {
     assertion_type: "urn:ietf:params:oauth:token-type:id-jag",
     assertion,
   };
-  const r = await jsonFetch("/agent/auth", { method: "POST", body: JSON.stringify(body) });
+  const r = await jsonFetch("/agent/register", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("exchange-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
   state.identity_assertion = r.body.identity_assertion;

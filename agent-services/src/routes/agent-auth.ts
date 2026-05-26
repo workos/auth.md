@@ -32,13 +32,13 @@ import {
 } from "../verify.js";
 
 // Agent-facing endpoints implementing the OTP-exchange flavor of the
-// agent-auth spec. The user-facing /agent/auth/claim/view endpoint at the
+// agent-auth spec. The user-facing /agent/register/claim/view endpoint at the
 // bottom of this file is also part of the spec — it's where the email link
 // lands and where the OTP is rendered.
 
 export const agentAuthRouter = Router();
 
-agentAuthRouter.post("/agent/auth", async (req, res) => {
+agentAuthRouter.post(config.registrationEndpointPath, async (req, res) => {
   const parsed = parseBody(agentAuthBody, req.body);
   if (!parsed.ok) {
     res.status(400).json({ error: "invalid_request", message: parsed.message });
@@ -64,7 +64,7 @@ agentAuthRouter.post("/agent/auth", async (req, res) => {
     identity_assertion: jwt,
     assertion_expires: expiresAt.toISOString(),
     pre_claim_scopes: config.preClaimScopes,
-    claim_url: `${config.baseUrl}/agent/auth/claim`,
+    claim_url: `${config.baseUrl}${config.claimEndpointPath}`,
     claim_token: claimTokenPlaintext,
     claim_token_expires: registration.claim!.expires_at.toISOString(),
     post_claim_scopes: config.postClaimScopes,
@@ -98,7 +98,7 @@ async function handleIdJagAssertion(
         aud: claims.aud,
         email: recipient,
       });
-    const viewUrl = `${config.baseUrl}/agent/auth/claim/view?token=${encodeURIComponent(claimViewTokenPlaintext)}`;
+    const viewUrl = `${config.baseUrl}${config.claimEndpointPath}/view?token=${encodeURIComponent(claimViewTokenPlaintext)}`;
     await sendClaimViewEmail({
       registrationId: registration.id,
       recipientEmail: recipient,
@@ -122,7 +122,7 @@ async function handleIdJagAssertion(
             : "This ID-JAG matches an existing account by phone number. Confirm ownership by completing the OTP claim flow.",
         registration_id: registration.id,
         registration_type: "id-jag-step-up",
-        claim_url: `${config.baseUrl}/agent/auth/claim`,
+        claim_url: `${config.baseUrl}${config.claimEndpointPath}`,
         claim_token: claimTokenPlaintext,
         claim_token_expires: registration.claim!.expires_at.toISOString(),
         post_claim_scopes: config.scopesSupported,
@@ -169,9 +169,9 @@ async function handleEmailAssertion(
     createEmailVerificationRegistration({ email: body.assertion });
 
   // Email-verification registrations bundle the claim ceremony — we send
-  // the OTP-view email immediately. The agent skips /agent/auth/claim and
+  // the OTP-view email immediately. The agent skips /agent/register/claim and
   // polls /complete with the OTP the user reads back.
-  const viewUrl = `${config.baseUrl}/agent/auth/claim/view?token=${encodeURIComponent(claimViewTokenPlaintext)}`;
+  const viewUrl = `${config.baseUrl}${config.claimEndpointPath}/view?token=${encodeURIComponent(claimViewTokenPlaintext)}`;
   await sendClaimViewEmail({
     registrationId: registration.id,
     recipientEmail: body.assertion,
@@ -186,7 +186,7 @@ async function handleEmailAssertion(
   res.json({
     registration_id: registration.id,
     registration_type: "email-verification",
-    claim_url: `${config.baseUrl}/agent/auth/claim`,
+    claim_url: `${config.baseUrl}${config.claimEndpointPath}`,
     claim_token: claimTokenPlaintext,
     claim_token_expires: registration.claim!.expires_at.toISOString(),
     post_claim_scopes: config.postClaimScopes,
@@ -194,8 +194,8 @@ async function handleEmailAssertion(
 }
 
 // Anonymous-only entry point. Email-verification registrations skip this —
-// their claim attempt is created in /agent/auth itself.
-agentAuthRouter.post("/agent/auth/claim", async (req, res) => {
+// their claim attempt is created in /agent/register itself.
+agentAuthRouter.post(config.claimEndpointPath, async (req, res) => {
   const parsed = parseBody(claimBody, req.body);
   if (!parsed.ok) {
     res.status(400).json({ error: "invalid_request", message: parsed.message });
@@ -265,7 +265,7 @@ agentAuthRouter.post("/agent/auth/claim", async (req, res) => {
     parsed.value.email,
   );
   const attempt = registration.claim!.attempt!;
-  const viewUrl = `${config.baseUrl}/agent/auth/claim/view?token=${encodeURIComponent(claimViewTokenPlaintext)}`;
+  const viewUrl = `${config.baseUrl}${config.claimEndpointPath}/view?token=${encodeURIComponent(claimViewTokenPlaintext)}`;
   await sendClaimViewEmail({
     registrationId: registration.id,
     recipientEmail: parsed.value.email,
@@ -286,7 +286,7 @@ agentAuthRouter.post("/agent/auth/claim", async (req, res) => {
 });
 
 // Exchanges a claim_attempt_token for an OTP.
-agentAuthRouter.post("/agent/auth/claim/attempt/challenge", (req, res) => {
+agentAuthRouter.post(`${config.claimEndpointPath}/attempt/challenge`, (req, res) => {
   const parsed = parseBody(generateOtpBody, req.body);
   if (!parsed.ok) {
     res.status(400).json({ error: "invalid_request", message: parsed.message });
@@ -324,7 +324,7 @@ agentAuthRouter.post("/agent/auth/claim/attempt/challenge", (req, res) => {
   });
 });
 
-agentAuthRouter.post("/agent/auth/claim/complete", async (req, res) => {
+agentAuthRouter.post(`${config.claimEndpointPath}/complete`, async (req, res) => {
   const parsed = parseBody(claimCompleteBody, req.body);
   if (!parsed.ok) {
     res.status(400).json({ error: "invalid_request", message: parsed.message });
@@ -399,7 +399,7 @@ async function buildCompleteResponse(
   };
   // Email-verification and id_jag registrations get a fresh identity_assertion
   // at /complete to use at /token. Anonymous registrations don't need one
-  // here — they received it from /agent/auth at registration time and any
+  // here — they received it from /agent/register at registration time and any
   // credentials minted from it get an in-place scope upgrade.
   if (
     registration.kind === "email_verification" ||
@@ -418,10 +418,10 @@ async function buildCompleteResponse(
 
 // User-facing OTP-view page. The email link lands here; the page gates
 // OTP minting behind an explicit user click that POSTs to
-// /agent/auth/claim/attempt/challenge. In production this page is typically
+// /agent/register/claim/attempt/challenge. In production this page is typically
 // gated by a user session to handle edge cases (like updating the email on
 // the claim) upfront instead of in the agent context.
-agentAuthRouter.get("/agent/auth/claim/view", async (req, res) => {
+agentAuthRouter.get(`${config.claimEndpointPath}/view`, async (req, res) => {
   const rawToken = req.query.token;
   const token = typeof rawToken === "string" ? rawToken : "";
   if (!token) {
@@ -515,7 +515,7 @@ function renderClaimViewPage(input: {
   var otpOut = document.getElementById("otp-out");
   var errOut = document.getElementById("error-out");
   var token = ${JSON.stringify(input.claimAttemptToken)};
-  fetch("/agent/auth/claim/attempt/challenge", {
+  fetch(${JSON.stringify(`${config.claimEndpointPath}/attempt/challenge`)}, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ claim_attempt_token: token }),
@@ -590,7 +590,7 @@ function escapeHtml(s: string): string {
 }
 
 agentAuthRouter.post(
-  "/agent/auth/revoke",
+  config.eventsEndpointPath,
   express.text({ type: "application/logout+jwt" }),
   async (req, res) => {
     const token = typeof req.body === "string" ? req.body.trim() : "";

@@ -50,7 +50,7 @@ export type RegistrationClaimAttempt = {
 // The agent-facing leg of the claim ceremony. The agent holds the claim
 // token; the email recipient holds the view token (inside the attempt). For
 // anonymous registrations the email/attempt aren't populated until the agent
-// initiates claim via /agent/auth/claim.
+// initiates claim via /agent/register/claim.
 export type RegistrationClaim = {
   token_hash: string;
   email?: string;
@@ -260,7 +260,7 @@ export function sha256Hex(input: string): string {
 // Anonymous registrations start with an empty claim (only the agent's claim
 // token is set — no email, no attempt). The agent receives the claim token
 // in the registration response and can later initiate the user-facing
-// ceremony by calling /agent/auth/claim with an email address.
+// ceremony by calling /agent/register/claim with an email address.
 export function createAnonymousRegistration(): {
   registration: Registration;
   claimTokenPlaintext: string;
