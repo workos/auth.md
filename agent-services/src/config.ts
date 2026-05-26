@@ -22,6 +22,8 @@ export const config = Object.freeze({
   serviceAssertionTtlSeconds: 3600,
   // Token endpoint path (RFC 7523 JWT-bearer grant).
   tokenEndpointPath: "/oauth2/token",
+  // Token revocation endpoint path (RFC 7009).
+  revocationEndpointPath: "/oauth2/revoke",
   // The client_id claim on service-signed identity_assertions. Recommended
   // forms: agent CIMD URL when enrolled, an OAuth client_id from the
   // service's client registry, or a URN sentinel like this one.

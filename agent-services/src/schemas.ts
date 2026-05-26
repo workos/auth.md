@@ -45,6 +45,13 @@ export const tokenEndpointBody = z.object({
   scope: z.string().optional(),
 });
 
+// RFC 7009 token revocation. token_type_hint is optional; the spec says the
+// server MAY use it as a hint but isn't required to honor it.
+export const revocationEndpointBody = z.object({
+  token: z.string().min(1),
+  token_type_hint: z.string().optional(),
+});
+
 export const generateOtpBody = z.object({
   claim_attempt_token: z.string().min(1),
 });

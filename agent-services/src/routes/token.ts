@@ -1,7 +1,11 @@
 import express, { Router } from "express";
 import { config } from "../config.js";
-import { parseBody, tokenEndpointBody } from "../schemas.js";
-import { issueAccessToken, registrations } from "../store.js";
+import {
+  parseBody,
+  revocationEndpointBody,
+  tokenEndpointBody,
+} from "../schemas.js";
+import { credentials, issueAccessToken, registrations } from "../store.js";
 import { verifyServiceIdJag } from "../verify.js";
 
 // RFC 7523 JWT-bearer grant at /oauth2/token. The agent presents a service-
@@ -142,4 +146,29 @@ tokenRouter.post(config.tokenEndpointPath, formParser, async (req, res) => {
   if (typeof expiresIn === "number") body.expires_in = expiresIn;
 
   res.json(body);
+});
+
+// RFC 7009 token revocation. The agent (or admin via back-channel) presents
+// a credential and the AS marks it revoked. Responds 200 regardless of
+// whether the token was found, already revoked, or unknown — prevents
+// enumeration. token_type_hint is accepted but not used.
+tokenRouter.post(config.revocationEndpointPath, formParser, (req, res) => {
+  const parsed = parseBody(revocationEndpointBody, req.body);
+  if (!parsed.ok) {
+    res
+      .status(400)
+      .json({ error: "invalid_request", error_description: parsed.message });
+    return;
+  }
+
+  const { token } = parsed.value;
+  const credential = credentials.get(token);
+  if (credential && !credential.revoked) {
+    credential.revoked = true;
+    console.log(
+      `[revoke] revoked credential bound to registration=${credential.registration_id ?? "<none>"}`,
+    );
+  }
+
+  res.sendStatus(200);
 });
