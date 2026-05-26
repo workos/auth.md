@@ -10,11 +10,8 @@ export type User = {
   name?: string;
 };
 
-export type CredentialType = "access_token" | "api_key";
-
 export type Credential = {
   token: string;
-  type: CredentialType;
   user_id?: string;
   scope: string[];
   issued_at: Date;
@@ -204,7 +201,6 @@ export function issueAccessToken(input: {
   const token = randomToken("at_");
   const cred: Credential = {
     token,
-    type: "access_token",
     user_id: input.userId,
     scope: input.scope,
     issued_at: now,
@@ -216,61 +212,6 @@ export function issueAccessToken(input: {
     aud: input.aud,
     registration_id: input.registrationId,
   };
-  credentials.set(token, cred);
-  return cred;
-}
-
-export type IssueApiKeyInput =
-  | {
-      source: "anonymous";
-      scope: string[];
-      registrationId: string;
-    }
-  | {
-      source: "email_verification";
-      scope: string[];
-      userId: string;
-      registrationId: string;
-    }
-  | {
-      source: "identity_assertion";
-      scope: string[];
-      userId: string;
-      iss: string;
-      sub: string;
-      aud: string;
-      registrationId?: string;
-    };
-
-export function issueApiKey(input: IssueApiKeyInput): Credential {
-  const token = randomToken("sk_test_", 20);
-  const base = {
-    token,
-    type: "api_key" as const,
-    scope: input.scope,
-    issued_at: new Date(),
-    revoked: false,
-    source: input.source,
-  };
-  let cred: Credential;
-  if (input.source === "anonymous") {
-    cred = { ...base, registration_id: input.registrationId };
-  } else if (input.source === "email_verification") {
-    cred = {
-      ...base,
-      user_id: input.userId,
-      registration_id: input.registrationId,
-    };
-  } else {
-    cred = {
-      ...base,
-      user_id: input.userId,
-      iss: input.iss,
-      sub: input.sub,
-      aud: input.aud,
-      registration_id: input.registrationId,
-    };
-  }
   credentials.set(token, cred);
   return cred;
 }
@@ -584,15 +525,11 @@ function completeAnonymousClaim(
   }
   markClaimed(registration, user.id);
 
-  // In-place scope upgrade: every unrevoked api_key tied to this
-  // registration gets the post-claim scope set. Access tokens aren't
-  // upgraded — their next refresh via /token picks up the new scopes.
+  // In-place scope upgrade: every unrevoked credential tied to this
+  // registration gets the post-claim scope set. Lets the agent keep using
+  // its existing token (with broader scope) instead of waiting for refresh.
   for (const cred of credentials.values()) {
-    if (
-      cred.registration_id === registration.id &&
-      cred.type === "api_key" &&
-      !cred.revoked
-    ) {
+    if (cred.registration_id === registration.id && !cred.revoked) {
       cred.user_id = user.id;
       cred.scope = config.postClaimScopes;
     }
@@ -613,10 +550,10 @@ function completeEmailVerificationClaim(
   }
   markClaimed(registration, user.id);
 
-  // Hardcoded to api_key for now — `requested_credential_type` was dropped
-  // from the registration record. Credential issuance via /complete is a
-  // legacy code path; the new model issues credentials only at /token.
-  const credential = issueApiKey({
+  // Credential issuance via /complete is a legacy code path; the new model
+  // issues credentials only at /token. This is preserved here so the
+  // existing /agent/auth flow still returns a usable credential.
+  const credential = issueAccessToken({
     source: "email_verification",
     scope: config.postClaimScopes,
     userId: user.id,
@@ -644,7 +581,7 @@ function completeIdJagClaim(registration: Registration): CompleteClaimResult {
   upsertDelegation(idJag.iss, idJag.sub, user.id);
   markClaimed(registration, user.id);
 
-  const credential = issueApiKey({
+  const credential = issueAccessToken({
     source: "identity_assertion",
     scope: config.scopesSupported,
     userId: user.id,

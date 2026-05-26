@@ -130,12 +130,6 @@ function renderHtml(seeded: { email: string; name: string }[]): string {
 <section id="step-5" hidden>
   <h2><span class="num">5</span>Exchange for credentials at consumer</h2>
   <p>With a valid ID-JAG, the agent POSTs it to the consumer's <code>/agent/auth</code> endpoint. The consumer verifies the signature against <em>this</em> provider's JWKS and returns credentials for the matched user. Requires the consumer sample running at the audience URL.</p>
-  <label>Requested credential type
-    <select id="exchange-cred-type">
-      <option value="access_token">access_token</option>
-      <option value="api_key">api_key</option>
-    </select>
-  </label>
   <div class="label">Request</div>
   <div class="req" id="exchange-req"><pre></pre></div>
   <button class="primary" type="button" data-action="exchange">Exchange at consumer</button>
@@ -255,19 +249,16 @@ function updateRevokePreview() {
 }
 function updateExchangePreview() {
   const aud = state.audience || document.getElementById("grant-audience").value;
-  const ct = document.getElementById("exchange-cred-type").value;
   const assertionHint = state.assertion ? state.assertion.slice(0, 40) + "..." : "eyJhbGc...";
   document.querySelector("#exchange-req pre").textContent =
     "POST " + aud + "/agent/auth\\nContent-Type: application/json\\n\\n" + jsonStr({
       type: "identity_assertion",
       assertion_type: "urn:ietf:params:oauth:token-type:id-jag",
       assertion: assertionHint,
-      requested_credential_type: ct,
     });
 }
 document.querySelectorAll("#step-2 input, #step-2 select").forEach((el) => el.addEventListener("input", updateGrantPreview));
 document.querySelectorAll("#step-3 input").forEach((el) => el.addEventListener("input", updateMintPreview));
-document.getElementById("exchange-cred-type").addEventListener("change", updateExchangePreview);
 updateGrantPreview();
 updateMintPreview();
 updateRevokePreview();
@@ -367,12 +358,10 @@ async function verify() {
 }
 
 async function exchange() {
-  const ct = document.getElementById("exchange-cred-type").value;
   const body = {
     type: "identity_assertion",
     assertion_type: "urn:ietf:params:oauth:token-type:id-jag",
     assertion: state.assertion,
-    requested_credential_type: ct,
   };
   let r;
   try {
@@ -394,8 +383,7 @@ async function exchange() {
   }
   document.getElementById("exchange-out").innerHTML = resBlock(r.status, r.body, r.ok);
   if (!r.ok) return;
-  state.credential = r.body.access_token || r.body.api_key;
-  state.credentialType = r.body.type;
+  state.credential = r.body.credential;
   document.getElementById("call-resource").disabled = !state.credential;
   markDone("step-5");
   reveal("step-6");

@@ -28,15 +28,12 @@ wellKnownRouter.get("/.well-known/oauth-authorization-server", (_req, res) => {
       claim_uri: `${config.baseUrl}/agent/auth/claim`,
       revocation_uri: `${config.baseUrl}/agent/auth/revoke`,
       identity_types_supported: ["anonymous", "identity_assertion"],
-      anonymous: {
-        credential_types_supported: ["api_key"],
-      },
+      anonymous: {},
       identity_assertion: {
         assertion_types_supported: [
           "urn:ietf:params:oauth:token-type:id-jag",
           "verified_email",
         ],
-        credential_types_supported: ["access_token", "api_key"],
       },
       events_supported: [
         "https://schemas.workos.com/events/agent/auth/identity/assertion/revoked",

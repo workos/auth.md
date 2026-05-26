@@ -17,7 +17,6 @@ apiRouter.get("/api/resource", requireCredential, (req, res) => {
         }
       : null,
     credential: {
-      type: credential.type,
       scope: credential.scope,
       source: credential.source,
       iss: credential.iss,

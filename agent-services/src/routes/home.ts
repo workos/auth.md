@@ -124,19 +124,19 @@ function renderHtml(): string {
 
 <section id="step-3" class="track-anon" hidden>
   <h2><span class="num">3</span>Register anonymously</h2>
-  <p>An agent without a user identity POSTs <code>{ "type": "anonymous", "requested_credential_type": "api_key" }</code>. The service issues an api_key with pre-claim scopes and returns a claim_token for the human-handoff ceremony.</p>
+  <p>An agent without a user identity POSTs <code>{ "type": "anonymous" }</code>. The service issues a credential with pre-claim scopes and returns a claim_token for the human-handoff ceremony.</p>
   <div class="label">Request</div>
   <div class="req"><pre>POST /agent/auth
 Content-Type: application/json
 
-{ "type": "anonymous", "requested_credential_type": "api_key" }</pre></div>
+{ "type": "anonymous" }</pre></div>
   <button class="primary" type="button" data-action="anon-register">Register</button>
   <div id="anon-register-out"></div>
 </section>
 
 <section id="step-4" class="track-anon" hidden>
-  <h2><span class="num">4</span>Call with the pre-claim api_key</h2>
-  <p>The api_key works immediately, but only with the scopes configured for unclaimed registrations (here: <code>api.read</code>).</p>
+  <h2><span class="num">4</span>Call with the pre-claim credential</h2>
+  <p>The credential works immediately, but only with the scopes configured for unclaimed registrations (here: <code>api.read</code>).</p>
   <button class="primary" type="button" data-action="anon-call-pre">Call /api/resource</button>
   <div id="anon-pre-out"></div>
 </section>
@@ -161,7 +161,7 @@ Content-Type: application/json
 
 <section id="step-7" class="track-anon" hidden>
   <h2><span class="num">7</span>Complete the claim</h2>
-  <p>The agent POSTs the OTP it heard from the user to <code>/agent/auth/claim/complete</code>. The pre-claim api_key keeps working — its scopes are upgraded in place.</p>
+  <p>The agent POSTs the OTP it heard from the user to <code>/agent/auth/claim/complete</code>. The pre-claim credential keeps working — its scopes are upgraded in place.</p>
   <label>OTP from user
     <input id="anon-otp" class="otp" placeholder="123456" maxlength="6">
   </label>
@@ -172,8 +172,8 @@ Content-Type: application/json
 </section>
 
 <section id="step-8" class="track-anon" hidden>
-  <h2><span class="num">8</span>Call with the post-claim api_key</h2>
-  <p>Same key, wider scope. The credential's <code>user_id</code> is now linked to the claiming user — before claim it had no user binding at all.</p>
+  <h2><span class="num">8</span>Call with the post-claim credential</h2>
+  <p>Same token, wider scope. The credential's <code>user_id</code> is now linked to the claiming user — before claim it had no user binding at all.</p>
   <button class="primary" type="button" data-action="anon-call-post">Call /api/resource</button>
   <div id="anon-post-out"></div>
 </section>
@@ -229,12 +229,6 @@ Content-Type: application/json
   <p>Paste an ID-JAG minted by the provider (run the <a href="${providerHint}" target="_blank">provider demo</a> through step 5, then copy the <code>assertion</code> value). The consumer verifies the signature against the provider's JWKS, enforces replay protection, and matches or provisions a user.</p>
   <label>ID-JAG assertion
     <textarea id="assertion" placeholder="eyJhbGc..."></textarea>
-  </label>
-  <label>Requested credential type
-    <select id="cred-type">
-      <option value="access_token">access_token</option>
-      <option value="api_key">api_key</option>
-    </select>
   </label>
   <div class="label">Request</div>
   <div class="req" id="exchange-req"><pre></pre></div>
@@ -300,7 +294,6 @@ function updateExchangePreview() {
     type: "identity_assertion",
     assertion_type: "urn:ietf:params:oauth:token-type:id-jag",
     assertion: (document.getElementById("assertion").value || "eyJhbGc...").slice(0, 40) + "...",
-    requested_credential_type: document.getElementById("cred-type").value,
   };
   document.querySelector("#exchange-req pre").textContent =
     "POST /agent/auth\\nContent-Type: application/json\\n\\n" + jsonStr(body);
@@ -331,7 +324,6 @@ function updateEmailRegisterPreview() {
     type: "identity_assertion",
     assertion_type: "verified_email",
     assertion: document.getElementById("email-assertion").value,
-    requested_credential_type: "api_key",
   };
   document.querySelector("#email-register-req pre").textContent =
     "POST /agent/auth\\nContent-Type: application/json\\n\\n" + jsonStr(body);
@@ -346,7 +338,6 @@ function updateEmailCompletePreview() {
 }
 
 document.getElementById("assertion").addEventListener("input", updateExchangePreview);
-document.getElementById("cred-type").addEventListener("change", updateExchangePreview);
 document.getElementById("anon-claim-email").addEventListener("input", updateAnonClaimPreview);
 document.getElementById("anon-otp").addEventListener("input", updateAnonCompletePreview);
 document.getElementById("email-assertion").addEventListener("input", updateEmailRegisterPreview);
@@ -416,7 +407,7 @@ async function discoverAs() {
 async function anonRegister() {
   const r = await jsonFetch("/agent/auth", {
     method: "POST",
-    body: JSON.stringify({ type: "anonymous", requested_credential_type: "api_key" }),
+    body: JSON.stringify({ type: "anonymous" }),
   });
   document.getElementById("anon-register-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
@@ -479,7 +470,6 @@ async function emailRegister() {
     type: "identity_assertion",
     assertion_type: "verified_email",
     assertion: email,
-    requested_credential_type: "api_key",
   };
   const r = await jsonFetch("/agent/auth", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("email-register-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
@@ -527,7 +517,6 @@ async function exchange() {
     type: "identity_assertion",
     assertion_type: "urn:ietf:params:oauth:token-type:id-jag",
     assertion,
-    requested_credential_type: document.getElementById("cred-type").value,
   };
   const r = await jsonFetch("/agent/auth", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("exchange-out").innerHTML = resBlock(r.status, null, r.body, r.ok);

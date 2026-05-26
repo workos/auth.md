@@ -7,19 +7,16 @@ const idJagAssertionBody = z.object({
   type: z.literal("identity_assertion"),
   assertion_type: z.literal(ID_JAG),
   assertion: z.string().min(1),
-  requested_credential_type: z.enum(["access_token", "api_key"]),
 });
 
 const emailAssertionBody = z.object({
   type: z.literal("identity_assertion"),
   assertion_type: z.literal(EMAIL_ASSERTION),
   assertion: z.email(),
-  requested_credential_type: z.enum(["access_token", "api_key"]),
 });
 
 const anonymousBody = z.object({
   type: z.literal("anonymous"),
-  requested_credential_type: z.literal("api_key"),
 });
 
 export const agentAuthBody = z.union([

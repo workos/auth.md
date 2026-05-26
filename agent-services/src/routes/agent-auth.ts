@@ -22,7 +22,6 @@ import {
   findRegistrationByClaimViewHash,
   generateOtpForRegistration,
   issueAccessToken,
-  issueApiKey,
   recordAnonymousClaimAttempt,
   revokeForDelegation,
   sha256Hex,
@@ -52,7 +51,7 @@ agentAuthRouter.post("/agent/auth", async (req, res) => {
 
   // type === "anonymous"
   const { registration, claimTokenPlaintext } = createAnonymousRegistration();
-  const credential = issueApiKey({
+  const credential = issueAccessToken({
     scope: config.preClaimScopes,
     source: "anonymous",
     registrationId: registration.id,
@@ -63,7 +62,6 @@ agentAuthRouter.post("/agent/auth", async (req, res) => {
   res.json({
     registration_id: registration.id,
     registration_type: "anonymous",
-    credential_type: "api_key",
     credential: credential.token,
     credential_expires: credential.expires_at?.toISOString() ?? null,
     scopes: credential.scope,
@@ -75,10 +73,7 @@ agentAuthRouter.post("/agent/auth", async (req, res) => {
 });
 
 async function handleIdJagAssertion(
-  body: {
-    assertion: string;
-    requested_credential_type: "access_token" | "api_key";
-  },
+  body: { assertion: string },
   res: express.Response,
 ): Promise<void> {
   const verified = await verifyIdJag(body.assertion);
@@ -149,30 +144,6 @@ async function handleIdJagAssertion(
     userId: user.id,
   });
 
-  if (body.requested_credential_type === "api_key") {
-    const cred = issueApiKey({
-      userId: user.id,
-      scope,
-      source: "identity_assertion",
-      iss: claims.iss,
-      sub: claims.sub,
-      aud: claims.aud,
-      registrationId: registration.id,
-    });
-    console.log(
-      `[agent-auth] issued api_key to user=${user.id} via iss=${claims.iss} sub=${claims.sub} registration=${registration.id}`,
-    );
-    res.json({
-      registration_id: registration.id,
-      registration_type: "agent-provider",
-      credential_type: "api_key",
-      credential: cred.token,
-      credential_expires: cred.expires_at?.toISOString() ?? null,
-      scopes: scope,
-    });
-    return;
-  }
-
   const cred = issueAccessToken({
     userId: user.id,
     scope,
@@ -188,7 +159,6 @@ async function handleIdJagAssertion(
   res.json({
     registration_id: registration.id,
     registration_type: "agent-provider",
-    credential_type: "access_token",
     credential: cred.token,
     credential_expires: cred.expires_at?.toISOString() ?? null,
     scopes: scope,
@@ -196,10 +166,7 @@ async function handleIdJagAssertion(
 }
 
 async function handleEmailAssertion(
-  body: {
-    assertion: string;
-    requested_credential_type: "access_token" | "api_key";
-  },
+  body: { assertion: string },
   res: express.Response,
 ): Promise<void> {
   const { registration, claimTokenPlaintext, claimViewTokenPlaintext } =
@@ -429,21 +396,20 @@ function humanCompleteError(error: string): string {
 
 function buildCompleteResponse(
   registration: Registration,
-  credential: ReturnType<typeof issueApiKey> | undefined,
+  credential: ReturnType<typeof issueAccessToken> | undefined,
 ): Record<string, unknown> {
   const base: Record<string, unknown> = {
     registration_id: registration.id,
     status: "claimed",
   };
-  // Email-verification and id_jag registrations receive a fresh
-  // credential at /complete. Anonymous registrations get an in-place scope
-  // upgrade on their existing API key — same key, wider scopes.
+  // Email-verification and id_jag registrations receive a fresh credential
+  // at /complete. Anonymous registrations get an in-place scope upgrade on
+  // their existing credential — same token, wider scopes.
   if (
     credential &&
     (registration.kind === "email_verification" ||
       registration.kind === "id_jag")
   ) {
-    base.credential_type = credential.type;
     base.credential = credential.token;
     base.credential_expires = credential.expires_at?.toISOString() ?? null;
     base.scopes = credential.scope;
