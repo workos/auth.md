@@ -25,11 +25,7 @@ import {
   revokeForDelegation,
   sha256Hex,
 } from "../store.js";
-import {
-  signServiceIdJag,
-  verifyIdJag,
-  verifyLogoutJwt,
-} from "../verify.js";
+import { type SetClaims, signServiceIdJag, verifyIdJag, verifySet } from "../verify.js";
 
 // Agent-facing endpoints implementing the OTP-exchange flavor of the
 // agent-auth spec. The user-facing /agent/register/claim/view endpoint at the
@@ -589,34 +585,55 @@ function escapeHtml(s: string): string {
   );
 }
 
+// SET event-schema dispatch table. Each entry maps a schema URI from the
+// SET's `events` claim to a handler that applies the event locally. Unknown
+// schemas are tolerated (RFC 8417 §2.2 doesn't require receivers to handle
+// every event type).
+const SET_EVENT_HANDLERS: Record<string, (claims: SetClaims) => void> = {
+  "https://schemas.workos.com/events/agent/auth/identity/assertion/revoked": (
+    claims,
+  ) => {
+    const count = revokeForDelegation(
+      claims.iss,
+      claims.sub ?? "",
+      claims.aud,
+    );
+    console.log(
+      `[event] identity-assertion-revoked: revoked ${count} credentials for iss=${claims.iss} sub=${claims.sub}`,
+    );
+  },
+};
+
+// RFC 8935 push-based SET receiver. Accepts a signed SET (RFC 8417), verifies
+// it, and dispatches each entry in the events claim to a registered handler.
 agentAuthRouter.post(
   config.eventsEndpointPath,
-  express.text({ type: "application/logout+jwt" }),
+  express.text({ type: "application/secevent+jwt" }),
   async (req, res) => {
     const token = typeof req.body === "string" ? req.body.trim() : "";
     if (!token) {
       res.status(400).json({
-        error: "invalid_request",
-        message: "Expected JWT body with Content-Type application/logout+jwt.",
+        err: "invalid_request",
+        description:
+          "Expected SET body with Content-Type application/secevent+jwt.",
       });
       return;
     }
-    const verified = await verifyLogoutJwt(token);
+    const verified = await verifySet(token);
     if (!verified.ok) {
-      res.status(400).json({
-        error: verified.error.code,
-        message: verified.error.message,
-      });
+      res
+        .status(400)
+        .json({ err: verified.error.code, description: verified.error.message });
       return;
     }
-    const count = revokeForDelegation(
-      verified.claims.iss,
-      verified.claims.sub,
-      verified.claims.aud,
-    );
-    console.log(
-      `[agent-auth] revoked ${count} credentials for iss=${verified.claims.iss} sub=${verified.claims.sub}`,
-    );
-    res.json({ revoked: count });
+    for (const schemaUri of Object.keys(verified.claims.events)) {
+      const handler = SET_EVENT_HANDLERS[schemaUri];
+      if (handler) {
+        handler(verified.claims);
+      } else {
+        console.log(`[event] no handler for ${schemaUri}; ignored`);
+      }
+    }
+    res.sendStatus(202);
   },
 );

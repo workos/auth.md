@@ -244,7 +244,7 @@ Content-Type: application/json
   <div class="req" id="call-req"><pre></pre></div>
   <button class="primary" type="button" data-action="call">Exchange &amp; call</button>
   <div id="call-out"></div>
-  <p class="note" style="margin-top:1rem">Revocation is driven from the provider side — see the provider demo's step 7. When the provider POSTs a <code>logout+jwt</code> to this consumer's <code>/agent/event/notify</code>, credentials for that <code>(iss, sub, aud)</code> are marked revoked. Re-clicking the call button will start returning 401.</p>
+  <p class="note" style="margin-top:1rem">Revocation is driven from the provider side — see the provider demo's step 7. When the provider POSTs a Security Event Token (<code>application/secevent+jwt</code>, RFC 8417) to this consumer's <code>/agent/event/notify</code>, credentials for that <code>(iss, sub, aud)</code> are marked revoked. Re-clicking the call button will start returning 401.</p>
 </section>
 </div>
 </div>

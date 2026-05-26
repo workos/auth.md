@@ -139,7 +139,7 @@ function renderHtml(seeded: { email: string; name: string }[]): string {
 
 <section id="step-6" hidden>
   <h2><span class="num">6</span>Revoke grant</h2>
-  <p>Deleting a grant removes it locally. If a <code>revocation_uri</code> was recorded, the provider first POSTs a <code>logout+jwt</code> there; if the call fails, the grant is retained and the endpoint returns 500. Any credentials the consumer issued for this delegation are invalidated.</p>
+  <p>Deleting a grant removes it locally. If a <code>revocation_uri</code> was recorded, the provider first POSTs a Security Event Token (<code>application/secevent+jwt</code>) there carrying an <code>identity-assertion-revoked</code> event; if the call fails, the grant is retained and the endpoint returns 500. Any credentials the consumer issued for this delegation are invalidated.</p>
   <div class="label">Request</div>
   <div class="req" id="revoke-req"><pre></pre></div>
   <button class="primary" type="button" data-action="revoke">Revoke</button>
@@ -449,7 +449,7 @@ async function revoke() {
 
   // If a credential was exchanged at the consumer, prove it's now rejected.
   // A 401 here is the expected outcome — it confirms the consumer processed
-  // the logout+jwt. A 200 would mean revocation didn't take effect.
+  // the revocation SET. A 200 would mean revocation didn't take effect.
   if (state.credential) {
     const url = state.audience + "/api/resource";
     try {

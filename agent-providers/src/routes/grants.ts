@@ -43,7 +43,7 @@ grantsRouter.delete("/grants/:id", requireSession, async (req, res) => {
       });
       resp = await fetch(grant.revocation_uri, {
         method: "POST",
-        headers: { "content-type": "application/logout+jwt" },
+        headers: { "content-type": "application/secevent+jwt" },
         body: logoutJwt,
       });
     } catch (err) {

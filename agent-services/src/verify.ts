@@ -324,18 +324,36 @@ export async function verifyServiceIdJag(
   return { ok: true, claims };
 }
 
-export type LogoutClaims = JWTPayload & {
+// Security Event Token shape per RFC 8417 §2. Receivers dispatch on the
+// `events` claim, where each key is a schema URI naming an event type and
+// each value carries the event-specific payload.
+export type SetClaims = JWTPayload & {
   iss: string;
-  sub: string;
+  sub?: string;
   aud: string;
   jti: string;
+  iat: number;
   events: Record<string, unknown>;
 };
 
-export async function verifyLogoutJwt(
+export type SetVerifyError = {
+  // RFC 8935 §2.4 error vocabulary.
+  code:
+    | "invalid_request"
+    | "invalid_key"
+    | "invalid_issuer"
+    | "invalid_audience"
+    | "authentication_failed";
+  message: string;
+};
+
+// Verifies a SET delivered via RFC 8935 push. Validates the JWT against the
+// transmitter's JWKS (resolved via the trust list), enforces the canonical
+// typ, and rejects replays. The caller dispatches on the events claim.
+export async function verifySet(
   jwt: string,
 ): Promise<
-  { ok: true; claims: LogoutClaims } | { ok: false; error: VerifyError }
+  { ok: true; claims: SetClaims } | { ok: false; error: SetVerifyError }
 > {
   const iss = peekIssuer(jwt);
   if (!iss || !isTrustedIssuer(iss)) {
@@ -347,39 +365,72 @@ export async function verifyLogoutJwt(
       },
     };
   }
+
+  let header;
+  try {
+    header = decodeProtectedHeader(jwt);
+  } catch {
+    return {
+      ok: false,
+      error: { code: "invalid_request", message: "Malformed JWT header." },
+    };
+  }
+  if (header.typ !== "secevent+jwt") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_request",
+        message: `Unexpected typ ${String(header.typ)}; wanted secevent+jwt.`,
+      },
+    };
+  }
+
+  let claims: SetClaims;
   try {
     const res = await jwtVerify(jwt, getJwks(iss), {
       issuer: iss,
       audience: config.baseUrl,
-      typ: "logout+jwt",
+      typ: "secevent+jwt",
       clockTolerance: config.clockSkewSeconds,
     });
-    const claims = res.payload as LogoutClaims;
-    if (!claims.jti || !claims.sub) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_request",
-          message: "Missing required claim (jti or sub).",
-        },
-      };
-    }
-    const replay = recordJti(
-      claims.jti,
-      claims.exp ?? Math.floor(Date.now() / 1000) + 300,
-    );
-    if (replay === "replay") {
-      return {
-        ok: false,
-        error: {
-          code: "replay_detected",
-          message: `jti ${claims.jti} seen before.`,
-        },
-      };
-    }
-    return { ok: true, claims };
+    claims = res.payload as SetClaims;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: { code: "invalid_signature", message } };
+    if (/audience/i.test(message)) {
+      return { ok: false, error: { code: "invalid_audience", message } };
+    }
+    return { ok: false, error: { code: "authentication_failed", message } };
   }
+
+  if (!claims.jti) {
+    return {
+      ok: false,
+      error: { code: "invalid_request", message: "Missing required jti." },
+    };
+  }
+  if (!claims.events || typeof claims.events !== "object") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_request",
+        message: "Missing or malformed events claim.",
+      },
+    };
+  }
+
+  const replay = recordJti(
+    claims.jti,
+    claims.exp ?? Math.floor(Date.now() / 1000) + 300,
+  );
+  if (replay === "replay") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_request",
+        message: `jti ${claims.jti} seen before.`,
+      },
+    };
+  }
+
+  return { ok: true, claims };
 }

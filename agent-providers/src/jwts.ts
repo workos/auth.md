@@ -47,6 +47,9 @@ export async function mintIdJag(input: IdJagInput): Promise<IdJagResult> {
   return { jwt, jti, expiresIn };
 }
 
+// Mints a Security Event Token (RFC 8417) carrying an
+// identity-assertion-revoked event. Sent via RFC 8935 push delivery to the
+// consumer's events_endpoint when a grant is revoked.
 export async function mintLogoutJwt(input: {
   user: User;
   audience: string;
@@ -56,10 +59,11 @@ export async function mintLogoutJwt(input: {
     sub: input.user.id,
     aud: input.audience,
     jti: randomUUID(),
+    iat: Math.floor(Date.now() / 1000),
     events: {
       "https://schemas.workos.com/events/agent/auth/identity/assertion/revoked":
         {},
     },
   };
-  return sign(payload, "logout+jwt");
+  return sign(payload, "secevent+jwt");
 }
