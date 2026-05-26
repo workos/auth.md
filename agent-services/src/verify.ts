@@ -1,7 +1,43 @@
-import { type JWTPayload, decodeProtectedHeader, jwtVerify } from "jose";
+import { randomUUID } from "node:crypto";
+import {
+  type JWTPayload,
+  type KeyLike,
+  SignJWT,
+  decodeProtectedHeader,
+  generateKeyPair,
+  jwtVerify,
+} from "jose";
 import { config } from "./config.js";
-import { recordJti } from "./store.js";
+import { type Registration, recordJti } from "./store.js";
 import { getJwks, isTrustedIssuer } from "./trust.js";
+
+// Service signing key for internal ID-JAGs. Generated at startup; ephemeral
+// across restarts. For self-bootstrapped registrations (anonymous, email-
+// verification, and ID-JAG step-ups that resolve cleanly) the service acts as
+// its own IdP — signs an identity_assertion that the agent then exchanges at
+// /oauth2/token (RFC 7523 JWT-bearer).
+const SERVICE_KEY_ID = "service-as-key-1";
+const SERVICE_SIGNING_ALG = "ES256";
+let serviceKeyPair: { privateKey: KeyLike; publicKey: KeyLike } | undefined;
+
+export async function getServiceSigningKey(): Promise<{
+  privateKey: KeyLike;
+  publicKey: KeyLike;
+  kid: string;
+  alg: string;
+}> {
+  if (!serviceKeyPair) {
+    serviceKeyPair = await generateKeyPair(SERVICE_SIGNING_ALG, {
+      extractable: false,
+    });
+  }
+  return {
+    privateKey: serviceKeyPair.privateKey,
+    publicKey: serviceKeyPair.publicKey,
+    kid: SERVICE_KEY_ID,
+    alg: SERVICE_SIGNING_ALG,
+  };
+}
 
 export type VerifyError = {
   code:
@@ -160,6 +196,130 @@ export async function verifyIdJag(
       },
     };
   }
+
+  return { ok: true, claims };
+}
+
+export type ServiceIdJagInput = {
+  registration: Registration;
+  email?: string;
+  emailVerified?: boolean;
+  amr?: string[];
+};
+
+export type ServiceIdJagClaims = IdJagClaims & {
+  registration_type: Registration["kind"];
+};
+
+// Mints a service-signed ID-JAG. Used by /agent/register (and the claim/
+// complete handler) to issue an identity_assertion that the agent presents
+// at /oauth2/token to obtain a credential.
+export async function signServiceIdJag(
+  input: ServiceIdJagInput,
+): Promise<{ jwt: string; expiresAt: Date }> {
+  const { privateKey, kid, alg } = await getServiceSigningKey();
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + config.serviceAssertionTtlSeconds;
+
+  const claims: JWTPayload = {
+    iss: config.baseUrl,
+    sub: input.registration.id,
+    aud: config.baseUrl,
+    jti: randomUUID(),
+    client_id: config.agentAuthClientId,
+    registration_type: input.registration.kind,
+  };
+  if (input.email) claims.email = input.email;
+  if (typeof input.emailVerified === "boolean") {
+    claims.email_verified = input.emailVerified;
+  }
+  if (input.amr && input.amr.length > 0) claims.amr = input.amr;
+
+  const jwt = await new SignJWT(claims)
+    .setProtectedHeader({ alg, typ: "oauth-id-jag+jwt", kid })
+    .setIssuedAt(now)
+    .setExpirationTime(exp)
+    .sign(privateKey);
+
+  return { jwt, expiresAt: new Date(exp * 1000) };
+}
+
+export type ServiceIdJagVerifyError = {
+  code:
+    | "invalid_assertion"
+    | "invalid_signature"
+    | "invalid_issuer"
+    | "invalid_audience"
+    | "expired"
+    | "replay_detected";
+  message: string;
+};
+
+// Verifies a service-signed ID-JAG presented at /oauth2/token. Same JWT
+// machinery as verifyIdJag, but the issuer is ourselves and the public key is
+// our own — no remote JWKS fetch.
+export async function verifyServiceIdJag(
+  jwt: string,
+): Promise<
+  | { ok: true; claims: ServiceIdJagClaims }
+  | { ok: false; error: ServiceIdJagVerifyError }
+> {
+  let header;
+  try {
+    header = decodeProtectedHeader(jwt);
+  } catch {
+    return {
+      ok: false,
+      error: { code: "invalid_assertion", message: "Malformed JWT header." },
+    };
+  }
+  if (header.typ !== "oauth-id-jag+jwt") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_assertion",
+        message: `Unexpected typ ${String(header.typ)}; wanted oauth-id-jag+jwt.`,
+      },
+    };
+  }
+
+  const { publicKey } = await getServiceSigningKey();
+  let claims: ServiceIdJagClaims;
+  try {
+    const res = await jwtVerify(jwt, publicKey, {
+      issuer: config.baseUrl,
+      audience: config.baseUrl,
+      typ: "oauth-id-jag+jwt",
+      clockTolerance: config.clockSkewSeconds,
+    });
+    claims = res.payload as ServiceIdJagClaims;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/expired|exp/i.test(message)) {
+      return { ok: false, error: { code: "expired", message } };
+    }
+    if (/audience/i.test(message)) {
+      return { ok: false, error: { code: "invalid_audience", message } };
+    }
+    if (/issuer/i.test(message)) {
+      return { ok: false, error: { code: "invalid_issuer", message } };
+    }
+    return { ok: false, error: { code: "invalid_signature", message } };
+  }
+
+  if (!claims.sub) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_assertion",
+        message: "Missing required claim (sub).",
+      },
+    };
+  }
+
+  // Service-signed assertions are intentionally reusable within their TTL —
+  // the agent re-calls /token with the same assertion to refresh the access
+  // token. No jti dedup here; short exp is the boundary instead.
 
   return { ok: true, claims };
 }

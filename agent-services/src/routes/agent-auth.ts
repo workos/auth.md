@@ -15,8 +15,9 @@ import {
   completeClaim,
   createAnonymousRegistration,
   createEmailVerificationRegistration,
-  createIdJagStepUpRegistration,
+  createIdJagRegistration,
   credentials,
+  findOrCreateIdJagRegistration,
   findRegistrationByClaimHash,
   findRegistrationByClaimViewHash,
   generateOtpForRegistration,
@@ -50,10 +51,12 @@ agentAuthRouter.post("/agent/auth", async (req, res) => {
   }
 
   // type === "anonymous"
-  const { registration, credential, claimTokenPlaintext } =
-    createAnonymousRegistration({
-      requestedCredentialType: parsed.value.requested_credential_type,
-    });
+  const { registration, claimTokenPlaintext } = createAnonymousRegistration();
+  const credential = issueApiKey({
+    scope: config.preClaimScopes,
+    source: "anonymous",
+    registrationId: registration.id,
+  });
   console.log(
     `[agent-auth] registered anonymous agent registration=${registration.id}`,
   );
@@ -66,7 +69,7 @@ agentAuthRouter.post("/agent/auth", async (req, res) => {
     scopes: credential.scope,
     claim_url: `${config.baseUrl}/agent/auth/claim`,
     claim_token: claimTokenPlaintext,
-    claim_token_expires: registration.expires_at.toISOString(),
+    claim_token_expires: registration.claim!.expires_at.toISOString(),
     post_claim_scopes: config.postClaimScopes,
   });
 });
@@ -95,19 +98,18 @@ async function handleIdJagAssertion(
     // phone-match we send the OTP there too since this demo has no SMS.
     const recipient = matchResult.matched_user.email;
     const { registration, claimTokenPlaintext, claimViewTokenPlaintext } =
-      createIdJagStepUpRegistration({
+      createIdJagRegistration({
         iss: claims.iss,
         sub: claims.sub,
         aud: claims.aud,
         email: recipient,
-        requestedCredentialType: body.requested_credential_type,
       });
     const viewUrl = `${config.baseUrl}/agent/auth/claim/view?token=${encodeURIComponent(claimViewTokenPlaintext)}`;
     await sendClaimViewEmail({
       registrationId: registration.id,
       recipientEmail: recipient,
       viewUrl,
-      expiresAt: registration.claim_view_expires_at!,
+      expiresAt: registration.claim!.attempt!.view_expires_at,
     });
     console.log(
       `[agent-auth] step-up required for iss=${claims.iss} sub=${claims.sub} via=${matchResult.via}; registration=${registration.id}`,
@@ -128,7 +130,7 @@ async function handleIdJagAssertion(
         registration_type: "id-jag-step-up",
         claim_url: `${config.baseUrl}/agent/auth/claim`,
         claim_token: claimTokenPlaintext,
-        claim_token_expires: registration.expires_at.toISOString(),
+        claim_token_expires: registration.claim!.expires_at.toISOString(),
         post_claim_scopes: config.scopesSupported,
       });
     return;
@@ -137,7 +139,15 @@ async function handleIdJagAssertion(
   const { user } = matchResult;
   const scope = config.scopesSupported;
 
-  const registrationId = `reg_${sha256Hex(`${claims.iss}|${claims.sub}|${claims.aud}`).slice(0, 22)}`;
+  // Clean ID-JAG match: ensure a registration exists for this (iss, sub, aud)
+  // so future credential lifecycle (revocation, audit, /token refresh) has a
+  // durable identity to anchor to. Idempotent across repeat presentations.
+  const registration = findOrCreateIdJagRegistration({
+    iss: claims.iss,
+    sub: claims.sub,
+    aud: claims.aud,
+    userId: user.id,
+  });
 
   if (body.requested_credential_type === "api_key") {
     const cred = issueApiKey({
@@ -147,12 +157,13 @@ async function handleIdJagAssertion(
       iss: claims.iss,
       sub: claims.sub,
       aud: claims.aud,
+      registrationId: registration.id,
     });
     console.log(
-      `[agent-auth] issued api_key to user=${user.id} via iss=${claims.iss} sub=${claims.sub}`,
+      `[agent-auth] issued api_key to user=${user.id} via iss=${claims.iss} sub=${claims.sub} registration=${registration.id}`,
     );
     res.json({
-      registration_id: registrationId,
+      registration_id: registration.id,
       registration_type: "agent-provider",
       credential_type: "api_key",
       credential: cred.token,
@@ -169,12 +180,13 @@ async function handleIdJagAssertion(
     iss: claims.iss,
     sub: claims.sub,
     aud: claims.aud,
+    registrationId: registration.id,
   });
   console.log(
-    `[agent-auth] issued access_token to user=${user.id} via iss=${claims.iss} sub=${claims.sub}`,
+    `[agent-auth] issued access_token to user=${user.id} via iss=${claims.iss} sub=${claims.sub} registration=${registration.id}`,
   );
   res.json({
-    registration_id: registrationId,
+    registration_id: registration.id,
     registration_type: "agent-provider",
     credential_type: "access_token",
     credential: cred.token,
@@ -191,10 +203,7 @@ async function handleEmailAssertion(
   res: express.Response,
 ): Promise<void> {
   const { registration, claimTokenPlaintext, claimViewTokenPlaintext } =
-    createEmailVerificationRegistration({
-      email: body.assertion,
-      requestedCredentialType: body.requested_credential_type,
-    });
+    createEmailVerificationRegistration({ email: body.assertion });
 
   // Email-verification registrations bundle the claim ceremony — we send
   // the OTP-view email immediately. The agent skips /agent/auth/claim and
@@ -204,7 +213,7 @@ async function handleEmailAssertion(
     registrationId: registration.id,
     recipientEmail: body.assertion,
     viewUrl,
-    expiresAt: registration.claim_view_expires_at!,
+    expiresAt: registration.claim!.attempt!.view_expires_at,
   });
 
   console.log(
@@ -216,7 +225,7 @@ async function handleEmailAssertion(
     registration_type: "email-verification",
     claim_url: `${config.baseUrl}/agent/auth/claim`,
     claim_token: claimTokenPlaintext,
-    claim_token_expires: registration.expires_at.toISOString(),
+    claim_token_expires: registration.claim!.expires_at.toISOString(),
     post_claim_scopes: config.postClaimScopes,
   });
 }
@@ -247,11 +256,13 @@ agentAuthRouter.post("/agent/auth/claim", async (req, res) => {
     });
     return;
   }
-  if (registration.expires_at.getTime() < Date.now()) {
-    registration.status = "expired";
-    if (registration.credential_token) {
-      const cred = credentials.get(registration.credential_token);
-      if (cred) cred.revoked = true;
+  if (registration.status === "expired") {
+    // Sweep credentials bound to this expired registration. No background
+    // job — we GC on the next interaction with the claim handle.
+    for (const cred of credentials.values()) {
+      if (cred.registration_id === registration.id && !cred.revoked) {
+        cred.revoked = true;
+      }
     }
     res
       .status(410)
@@ -270,17 +281,18 @@ agentAuthRouter.post("/agent/auth/claim", async (req, res) => {
   // window still open), echo current state without resending the email. A
   // same-email retry after the view window expires falls through and mints
   // a fresh attempt below.
+  const inflight = registration.claim?.attempt;
   if (
     registration.status === "pending_claim" &&
-    registration.claim_email === parsed.value.email &&
-    registration.claim_view_expires_at &&
-    registration.claim_view_expires_at.getTime() > Date.now()
+    registration.claim?.email === parsed.value.email &&
+    inflight &&
+    inflight.view_expires_at.getTime() > Date.now()
   ) {
     res.json({
       registration_id: registration.id,
-      claim_attempt_id: registration.claim_attempt_id!,
+      claim_attempt_id: inflight.id,
       status: "initiated",
-      expires_at: registration.claim_view_expires_at.toISOString(),
+      expires_at: inflight.view_expires_at.toISOString(),
     });
     return;
   }
@@ -289,12 +301,13 @@ agentAuthRouter.post("/agent/auth/claim", async (req, res) => {
     registration,
     parsed.value.email,
   );
+  const attempt = registration.claim!.attempt!;
   const viewUrl = `${config.baseUrl}/agent/auth/claim/view?token=${encodeURIComponent(claimViewTokenPlaintext)}`;
   await sendClaimViewEmail({
     registrationId: registration.id,
     recipientEmail: parsed.value.email,
     viewUrl,
-    expiresAt: registration.claim_view_expires_at!,
+    expiresAt: attempt.view_expires_at,
   });
 
   console.log(
@@ -303,9 +316,9 @@ agentAuthRouter.post("/agent/auth/claim", async (req, res) => {
 
   res.json({
     registration_id: registration.id,
-    claim_attempt_id: registration.claim_attempt_id!,
+    claim_attempt_id: attempt.id,
     status: "initiated",
-    expires_at: registration.claim_view_expires_at!.toISOString(),
+    expires_at: attempt.view_expires_at.toISOString(),
   });
 });
 
@@ -332,10 +345,8 @@ agentAuthRouter.post("/agent/auth/claim/attempt/challenge", (req, res) => {
       .json({ error: "claim_completed", message: "Already claimed." });
     return;
   }
-  if (
-    !registration.claim_view_expires_at ||
-    registration.claim_view_expires_at.getTime() < Date.now()
-  ) {
+  const viewExpires = registration.claim?.attempt?.view_expires_at;
+  if (!viewExpires || viewExpires.getTime() < Date.now()) {
     res
       .status(410)
       .json({ error: "claim_expired", message: "Claim window has closed." });
@@ -424,13 +435,13 @@ function buildCompleteResponse(
     registration_id: registration.id,
     status: "claimed",
   };
-  // Email-verification and id_jag_step_up registrations receive a fresh
+  // Email-verification and id_jag registrations receive a fresh
   // credential at /complete. Anonymous registrations get an in-place scope
   // upgrade on their existing API key — same key, wider scopes.
   if (
     credential &&
     (registration.kind === "email_verification" ||
-      registration.kind === "id_jag_step_up")
+      registration.kind === "id_jag")
   ) {
     base.credential_type = credential.type;
     base.credential = credential.token;
@@ -490,10 +501,8 @@ agentAuthRouter.get("/agent/auth/claim/view", async (req, res) => {
       );
     return;
   }
-  if (
-    !registration.claim_view_expires_at ||
-    registration.claim_view_expires_at.getTime() < Date.now()
-  ) {
+  const viewExpires = registration.claim?.attempt?.view_expires_at;
+  if (!viewExpires || viewExpires.getTime() < Date.now()) {
     res
       .status(410)
       .type("html")
@@ -517,7 +526,7 @@ agentAuthRouter.get("/agent/auth/claim/view", async (req, res) => {
       renderClaimViewPage({
         ok: true,
         title: "Read this code back to the agent",
-        message: `The agent will ask you for a one-time code to confirm you're the owner of <code>${escapeHtml(registration.claim_email ?? "")}</code>. Read the code below back to the agent — do not share it with anyone else.`,
+        message: `The agent will ask you for a one-time code to confirm you're the owner of <code>${escapeHtml(registration.claim?.email ?? "")}</code>. Read the code below back to the agent — do not share it with anyone else.`,
         claimAttemptToken: token,
       }),
     );

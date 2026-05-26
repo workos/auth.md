@@ -38,6 +38,16 @@ export const claimCompleteBody = z.object({
   otp: z.string().min(1),
 });
 
+// RFC 7523 JWT-bearer grant at /oauth2/token. `assertion` is the parameter
+// name RFC 7523 §2.1 mandates; the value is the JWT the agent received as
+// `identity.assertion` from /agent/register.
+export const tokenEndpointBody = z.object({
+  grant_type: z.literal("urn:ietf:params:oauth:grant-type:jwt-bearer"),
+  assertion: z.string().min(1),
+  resource: z.string().optional(),
+  scope: z.string().optional(),
+});
+
 export const generateOtpBody = z.object({
   claim_attempt_token: z.string().min(1),
 });

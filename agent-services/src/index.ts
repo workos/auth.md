@@ -6,6 +6,7 @@ import { apiRouter } from "./routes/api.js";
 import { authMdRouter } from "./routes/auth-md.js";
 import { homeRouter } from "./routes/home.js";
 import { mailRouter } from "./routes/mail.js";
+import { tokenRouter } from "./routes/token.js";
 import { wellKnownRouter } from "./routes/well-known.js";
 
 function accessLog(
@@ -34,6 +35,7 @@ async function main() {
   app.use(authMdRouter);
   app.use(mailRouter);
   app.use(agentAuthRouter);
+  app.use(tokenRouter);
   app.use(apiRouter);
 
   app.use(
