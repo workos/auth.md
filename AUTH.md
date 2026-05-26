@@ -58,40 +58,44 @@ Response shape:
   "authorization_servers": ["https://auth.service.com/"],
   "scopes_supported": ["api.read", "api.write"],
   "bearer_methods_supported": ["header"],
+
+  "issuer": "https://auth.service.com",
+  "token_endpoint": "https://auth.service.com/oauth2/token",
+  "revocation_endpoint": "https://auth.service.com/oauth2/revoke",
+  "grant_types_supported": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
+
   "agent_auth": {
     "skill": "https://service.com/auth.md",
-    "register_uri": "https://auth.service.com/agent/auth",
-    "claim_uri": "https://auth.service.com/agent/auth/claim",
-    "revocation_uri": "https://auth.service.com/agent/auth/revoke",
+    "registration_endpoint": "https://auth.service.com/agent/register",
+    "claim_endpoint": "https://auth.service.com/agent/register/claim",
+    "events_endpoint": "https://auth.service.com/agent/event/notify",
     "identity_types_supported": ["anonymous", "identity_assertion"],
-    "anonymous": {
-      "credential_types_supported": ["api_key"]
-    },
     "identity_assertion": {
       "assertion_types_supported": [
         "urn:ietf:params:oauth:token-type:id-jag",
         "verified_email"
-      ],
-      "credential_types_supported": ["access_token", "api_key"]
+      ]
     },
     "events_supported": [
-      "https://schemas.workos.com/events/agent/auth/identity/assertion/revoked"
+      "https://schemas.workos.com/events/agent/identity/assertion/revoked"
     ]
   }
 }
 ```
 
-The outer fields restate the PRM. The `agent_auth` block is the part written for you — read it in full. Every field there is relevant:
+The outer fields restate the PRM. The top-level OAuth endpoints (`issuer`, `token_endpoint`, `revocation_endpoint`, `grant_types_supported`) are standard [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) / [RFC 7009](https://datatracker.ietf.org/doc/html/rfc7009) / [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) fields. The `agent_auth` block is the profile-specific bootstrap surface — read it in full. Every field is relevant:
 
-- `skill` — the URL of this document.
-- `register_uri` — where you POST to register (Step 3).
-- `claim_uri` — where you POST the claim invite (Step 4, anonymous flow only).
-- `revocation_uri` — where the provider POSTs a `logout+jwt` to revoke your credential. You don't call this; it tells you what to expect.
-- `identity_types_supported` — which registration methods this service accepts. Pick yours from Step 2.
-- `anonymous.credential_types_supported` — credential shapes available when registering anonymously.
-- `identity_assertion.assertion_types_supported` — which assertion types this service accepts (ID-JAG, verified email, etc.).
-- `identity_assertion.credential_types_supported` — credential shapes available when registering with an assertion.
-- `events_supported` — security event schemas this service can ingest (currently revocation). Informational; you don't act on these directly.
+- `issuer` — the canonical issuer URL of this authorization server. Validate the `iss` claim of any token the AS signs against this.
+- `token_endpoint` — where you exchange a service-signed identity assertion for an access_token (Step 5).
+- `revocation_endpoint` — where you POST to revoke an access_token ([RFC 7009](https://datatracker.ietf.org/doc/html/rfc7009)).
+- `grant_types_supported` — confirms this AS accepts `urn:ietf:params:oauth:grant-type:jwt-bearer` ([RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523)) at `/token`.
+- `agent_auth.skill` — the URL of this document.
+- `agent_auth.registration_endpoint` — where you POST to register (Step 3).
+- `agent_auth.claim_endpoint` — where you POST the claim invite and OTP (Step 4).
+- `agent_auth.events_endpoint` — where the provider POSTs a [Security Event Token (RFC 8417)](https://datatracker.ietf.org/doc/html/rfc8417) to notify the service of upstream identity events. You don't call this; it tells you what to expect.
+- `agent_auth.identity_types_supported` — which registration methods this service accepts. Pick yours from Step 2.
+- `agent_auth.identity_assertion.assertion_types_supported` — which assertion types this service accepts (ID-JAG, verified email, etc.).
+- `agent_auth.events_supported` — security event schemas this service can ingest (currently revocation). Informational; you don't act on these directly.
 
 ## Step 2 — Pick a method
 
@@ -120,14 +124,13 @@ Mint the assertion with:
 - Near-term `exp` (~5 minutes)
 
 ```http
-POST /agent/auth
+POST /agent/register
 Content-Type: application/json
 
 {
   "type": "identity_assertion",
   "assertion_type": "urn:ietf:params:oauth:token-type:id-jag",
-  "assertion": "<your ID-JAG JWT>",
-  "requested_credential_type": "access_token"
+  "assertion": "<your ID-JAG JWT>"
 }
 ```
 
@@ -137,26 +140,23 @@ Response (200):
 {
   "registration_id": "reg_...",
   "registration_type": "agent-provider",
-  "credential_type": "access_token",
-  "credential": "<token>",
-  "credential_expires": "2026-05-04T13:00:00.000Z",
-  "scopes": ["..."]
+  "identity_assertion": "<service-signed ID-JAG>",
+  "identity_assertion_expires": "2026-05-04T13:00:00.000Z"
 }
 ```
 
-Extract `credential`. Go to [Step 5](#step-5--use-the-credential).
+The service verified your ID-JAG and minted a service-signed identity assertion bound to the registration. Keep `identity_assertion` and go to [Step 5](#step-5--exchange-the-assertion).
 
 ### identity_assertion + email
 
 ```http
-POST /agent/auth
+POST /agent/register
 Content-Type: application/json
 
 {
   "type": "identity_assertion",
   "assertion_type": "verified_email",
-  "assertion": "user@example.com",
-  "requested_credential_type": "api_key"
+  "assertion": "user@example.com"
 }
 ```
 
@@ -166,24 +166,22 @@ Response (200):
 {
   "registration_id": "reg_...",
   "registration_type": "email-verification",
-  "claim_url": "https://auth.service.com/agent/auth/claim",
+  "claim_url": "https://auth.service.com/agent/register/claim",
   "claim_token": "clm_...",
-  "claim_token_expires": "2026-05-21T17:31:25.994Z",
-  "post_claim_scopes": ["api.read", "api.write"]
+  "claim_token_expires": "2026-05-21T17:31:25.994Z"
 }
 ```
 
-There is no credential yet. The service has already emailed the user. Keep `claim_token` and go to [Step 4](#step-4--claim-ceremony). `claim_token` is returned exactly once — hold it in memory for the duration of the ceremony; do not persist it past Step 4.
+There is no identity assertion yet — the user has to read back an OTP first. The service has already emailed them. Keep `claim_token` and go to [Step 4](#step-4--claim-ceremony). `claim_token` is returned exactly once — hold it in memory for the duration of the ceremony; do not persist it past Step 4.
 
 ### anonymous
 
 ```http
-POST /agent/auth
+POST /agent/register
 Content-Type: application/json
 
 {
-  "type": "anonymous",
-  "requested_credential_type": "api_key"
+  "type": "anonymous"
 }
 ```
 
@@ -193,18 +191,16 @@ Response (200):
 {
   "registration_id": "reg_...",
   "registration_type": "anonymous",
-  "credential_type": "api_key",
-  "credential": "sk_test_...",
-  "credential_expires": null,
-  "scopes": ["api.read"],
-  "claim_url": "https://auth.service.com/agent/auth/claim",
+  "identity_assertion": "<service-signed ID-JAG>",
+  "identity_assertion_expires": "2026-05-04T13:00:00.000Z",
+  "claim_url": "https://auth.service.com/agent/register/claim",
   "claim_token": "clm_...",
   "claim_token_expires": "2026-05-21T17:26:32.915Z",
   "post_claim_scopes": ["api.read", "api.write"]
 }
 ```
 
-You have a usable credential immediately at pre-claim scopes. If you also want a human to take ownership and unlock `post_claim_scopes`, go to [Step 4](#step-4--claim-ceremony). Otherwise skip to [Step 5](#step-5--use-the-credential). `claim_token` is returned exactly once — hold it in memory for the duration of the ceremony; do not persist it past Step 4.
+You have a usable identity assertion immediately, at pre-claim scopes. Go to [Step 5](#step-5--exchange-the-assertion) to mint your first access_token. If you also want a human to take ownership and unlock `post_claim_scopes`, go to [Step 4](#step-4--claim-ceremony) — after claim completes, your existing access_tokens issued from this registration are upgraded in place. `claim_token` is returned exactly once — hold it in memory for the duration of the ceremony; do not persist it past Step 4.
 
 ## Step 4 — Claim ceremony
 
@@ -215,7 +211,7 @@ The end goal: get the user to read a 6-digit OTP back to you.
 Skip this for `email` registrations — the email was sent during Step 3.
 
 ```http
-POST /agent/auth/claim
+POST /agent/register/claim
 Content-Type: application/json
 
 {
@@ -246,7 +242,7 @@ The user receives an email, clicks the link, sees a 6-digit OTP, reads it back t
 ### 4c. Submit the OTP
 
 ```http
-POST /agent/auth/claim/complete
+POST /agent/register/claim/complete
 Content-Type: application/json
 
 {
@@ -261,7 +257,7 @@ Response on success (anonymous):
 { "registration_id": "reg_...", "status": "claimed" }
 ```
 
-Your existing pre-claim API key keeps working — its scope set is upgraded in place. No new credential is issued.
+Your existing access_tokens minted from this registration keep working — their scope set is upgraded in place. No new identity assertion is issued; the one from Step 3 still resolves.
 
 Response on success (email-verification):
 
@@ -269,60 +265,88 @@ Response on success (email-verification):
 {
   "registration_id": "reg_...",
   "status": "claimed",
-  "credential_type": "access_token",
-  "credential": "<token>",
-  "credential_expires": "...",
-  "scopes": ["..."]
+  "identity_assertion": "<service-signed ID-JAG>",
+  "identity_assertion_expires": "..."
 }
 ```
 
-Extract `credential`.
+Keep `identity_assertion` and go to [Step 5](#step-5--exchange-the-assertion).
 
-## Step 5 — Use the credential
+## Step 5 — Exchange the assertion
 
-Whether `access_token` or `api_key`, present as a bearer token:
+Trade the service-signed `identity_assertion` for an access_token at the standard `token_endpoint` using the [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) JWT-bearer grant. Request body is form-encoded:
+
+```http
+POST /oauth2/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer
+&assertion=<identity_assertion from Step 3 or 4>
+&resource=https://api.service.com/
+```
+
+Response (200):
+
+```json
+{
+  "access_token": "<token>",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "api.read api.write"
+}
+```
+
+Extract `access_token` and go to [Step 6](#step-6--use-the-credential). The same `identity_assertion` can be re-used to mint additional access_tokens until it expires.
+
+If `/oauth2/token` returns `invalid_grant`, your `identity_assertion` is expired or revoked — restart at [Step 3](#step-3--register) to mint a fresh one. If it returns `insufficient_user_authentication` ([RFC 9470](https://datatracker.ietf.org/doc/html/rfc9470)), the registration moved into a state requiring re-claim — restart at [Step 3](#step-3--register) and walk the claim ceremony again.
+
+## Step 6 — Use the credential
+
+Present the `access_token` as a bearer token:
 
 ```http
 GET /api/some-resource
-Authorization: Bearer <credential>
+Authorization: Bearer <access_token>
 ```
 
-- `access_token` from an ID-JAG: when it expires, mint a **fresh** ID-JAG and re-register. There is no refresh flow.
-- `access_token` from a claim ceremony: when it expires, re-run the ceremony or present a fresh assertion.
-- `api_key`: typically no expiry (`credential_expires: null`), but still subject to revocation.
+**Refresh.** When the access_token expires (`expires_in` seconds after issuance), re-call [Step 5](#step-5--exchange-the-assertion) with the same `identity_assertion`. When the identity assertion itself expires or `/oauth2/token` returns `invalid_grant`, restart at [Step 3](#step-3--register). There is no OAuth refresh_token in this flow — the two-step pattern replaces it.
 
-If you get a 401 on a previously-working credential: drop it, restart at [Step 1](#step-1--discover). Do not stash the credential and retry.
+If you get a 401 on a previously-working access_token: try [Step 5](#step-5--exchange-the-assertion) once with the current assertion. If that also fails, drop everything and restart at [Step 1](#step-1--discover).
 
 Full API reference: `https://docs.service.com/`.
 
 ## Errors
 
-| Code                          | Where                        | What to do                                                                             |
-| ----------------------------- | ---------------------------- | -------------------------------------------------------------------------------------- |
-| `invalid_signature`           | `/agent/auth` (ID-JAG)       | Signature didn't verify. Mint a fresh ID-JAG.                                          |
-| `replay_detected`             | `/agent/auth` (ID-JAG)       | `jti` already used. Mint a fresh ID-JAG with a new `jti`.                              |
-| `audience_mismatch`           | `/agent/auth` (ID-JAG)       | `aud` wrong. Mint with the correct `aud` (this service's AS base URL).                 |
-| `credential_expired`          | `/agent/auth` (ID-JAG)       | ID-JAG `exp` is past. Mint a fresh one.                                                |
-| `anonymous_not_enabled`       | `/agent/auth`                | This service doesn't accept anonymous. Pick another method from Step 2.                |
-| `verified_email_not_enabled`  | `/agent/auth`                | Email verification disabled here. Pick another method.                                 |
-| `issuer_not_enabled`          | `/agent/auth`                | Provider not on this service's trust list. Pick another method.                        |
-| `unsupported_credential_type` | `/agent/auth`                | Requested credential not supported for this method. Re-read AS metadata and adjust.    |
-| `rate_limited` (429)          | any                          | Back off and retry.                                                                    |
-| `invalid_claim_token`         | `/agent/auth/claim/complete` | `claim_token` wrong or expired. Restart at Step 3.                                     |
-| `otp_invalid`                 | `/agent/auth/claim/complete` | OTP mismatch. Ask the user to re-read the code.                                        |
-| `otp_expired`                 | `/agent/auth/claim/complete` | OTP window passed. Re-trigger the claim email (Step 4a) or restart at Step 3.          |
-| `claim_expired`               | `/agent/auth/claim/complete` | The whole registration expired. Restart at Step 3.                                     |
-| `previously_claimed`          | `/agent/auth/claim/complete` | Someone already finished this claim. Restart at Step 3 if you need a fresh credential. |
+Errors at `/agent/register` and `/agent/register/claim/*` use profile-specific codes (the registration ceremonies have no OAuth analog). Errors at `/oauth2/token` use OAuth-standard vocabulary per [RFC 6749](https://datatracker.ietf.org/doc/html/rfc6749) / [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) / [RFC 9470](https://datatracker.ietf.org/doc/html/rfc9470).
+
+| Code                               | Where                            | What to do                                                                                                                                                             |
+| ---------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anonymous_not_enabled`            | `/agent/register`                | This service doesn't accept anonymous. Pick another method from Step 2.                                                                                                |
+| `verified_email_not_enabled`       | `/agent/register`                | Email verification disabled here. Pick another method.                                                                                                                 |
+| `issuer_not_enabled`               | `/agent/register`                | Provider not on this service's trust list. Pick another method.                                                                                                        |
+| `invalid_request`                  | `/agent/register`                | Body shape, missing claims, ID-JAG signature/`jti`/`aud` problems, or unverified identity. Fix the input (mint a fresh ID-JAG if signature/`jti`/`aud`/`exp`-related). |
+| `invalid_claim_token`              | `/agent/register/claim/complete` | `claim_token` wrong or expired. Restart at Step 3.                                                                                                                     |
+| `otp_invalid`                      | `/agent/register/claim/complete` | OTP mismatch. Ask the user to re-read the code.                                                                                                                        |
+| `otp_expired`                      | `/agent/register/claim/complete` | OTP window passed. Re-trigger the claim email (Step 4a) or restart at Step 3.                                                                                          |
+| `claim_expired`                    | `/agent/register/claim/complete` | The whole registration expired. Restart at Step 3.                                                                                                                     |
+| `previously_claimed`               | `/agent/register/claim/complete` | Someone already finished this claim. Restart at Step 3 if you need a fresh assertion.                                                                                  |
+| `invalid_grant`                    | `/oauth2/token`                  | Assertion expired, revoked, replayed, or otherwise failed verification. Restart at [Step 3](#step-3--register) to mint a fresh one.                                    |
+| `invalid_client`                   | `/oauth2/token`                  | `client_id` not recognized. Re-read AS metadata.                                                                                                                       |
+| `unsupported_grant_type`           | `/oauth2/token`                  | `grant_type` must be `urn:ietf:params:oauth:grant-type:jwt-bearer`.                                                                                                    |
+| `insufficient_user_authentication` | `/oauth2/token`                  | Step-up needed ([RFC 9470](https://datatracker.ietf.org/doc/html/rfc9470)). Restart at [Step 3](#step-3--register) and walk the claim ceremony.                        |
+| `rate_limited` (429)               | any                              | Back off and retry.                                                                                                                                                    |
 
 Retry policy:
 
 - 5xx → exponential backoff, retry the same request.
 - 4xx → do not retry the same payload; act on the table above.
-- 401 on a previously-working credential → drop the credential and restart at [Step 1](#step-1--discover).
+- 401 on a previously-working access_token → retry [Step 5](#step-5--exchange-the-assertion) once with the current assertion. If that fails, restart at [Step 1](#step-1--discover).
 
 ## Revocation
 
-You do not initiate revocation yourself. Two paths exist:
+Two independent layers can kill what you're holding:
 
-- **Provider-driven (ID-JAG flows)**: the provider that minted your ID-JAG can POST a `logout+jwt` to this service's `revocation_uri`. Your credential will be invalidated. You discover this on the next API call returning 401 — restart at [Step 1](#step-1--discover).
-- **Email / anonymous flows**: there is no agent-facing revoke endpoint. On a 401 for a previously-working credential, drop it and restart at Step 1.
+- **Credential layer ([RFC 7009](https://datatracker.ietf.org/doc/html/rfc7009), `revocation_endpoint`)** — agent-callable. POST `token=<access_token>&token_type_hint=access_token` (form-encoded) to the top-level `revocation_endpoint` to kill one access_token. 200 on success, idempotent. Your `identity_assertion` is intact; re-run [Step 5](#step-5--exchange-the-assertion) to mint a fresh access_token.
+- **Registration layer ([RFC 8935](https://datatracker.ietf.org/doc/html/rfc8935) Security Event Token delivery, `agent_auth.events_endpoint`)** — provider-driven. The provider that minted your ID-JAG can POST a [SET (RFC 8417)](https://datatracker.ietf.org/doc/html/rfc8417) (`Content-Type: application/secevent+jwt`) to this service's `events_endpoint`. The service invalidates the identity assertion and every access_token derived from it. You don't call this; you discover it the next time `/oauth2/token` returns `invalid_grant` — restart at [Step 3](#step-3--register).
+
+On a 401 for a previously-working access_token: try [Step 5](#step-5--exchange-the-assertion) once. If `/oauth2/token` succeeds, the credential was revoked at the RFC 7009 layer and your fresh access_token works. If `/oauth2/token` returns `invalid_grant`, the registration was killed at the RFC 8935 layer — restart at [Step 3](#step-3--register).
