@@ -25,7 +25,12 @@ import {
   revokeForDelegation,
   sha256Hex,
 } from "../store.js";
-import { type SetClaims, signServiceIdJag, verifyIdJag, verifySet } from "../verify.js";
+import {
+  type SetClaims,
+  signServiceIdJag,
+  verifyIdJag,
+  verifySet,
+} from "../verify.js";
 
 // Agent-facing endpoints implementing the OTP-exchange flavor of the
 // agent-auth spec. The user-facing /agent/register/claim/view endpoint at the
@@ -282,76 +287,89 @@ agentAuthRouter.post(config.claimEndpointPath, async (req, res) => {
 });
 
 // Exchanges a claim_attempt_token for an OTP.
-agentAuthRouter.post(`${config.claimEndpointPath}/attempt/challenge`, (req, res) => {
-  const parsed = parseBody(generateOtpBody, req.body);
-  if (!parsed.ok) {
-    res.status(400).json({ error: "invalid_request", message: parsed.message });
-    return;
-  }
-  const registration = findRegistrationByClaimViewHash(
-    sha256Hex(parsed.value.claim_attempt_token),
-  );
-  if (!registration) {
-    res.status(410).json({
-      error: "claim_superseded",
-      message: "The claim attempt token is invalid or has been superseded.",
+agentAuthRouter.post(
+  `${config.claimEndpointPath}/attempt/challenge`,
+  (req, res) => {
+    const parsed = parseBody(generateOtpBody, req.body);
+    if (!parsed.ok) {
+      res
+        .status(400)
+        .json({ error: "invalid_request", message: parsed.message });
+      return;
+    }
+    const registration = findRegistrationByClaimViewHash(
+      sha256Hex(parsed.value.claim_attempt_token),
+    );
+    if (!registration) {
+      res.status(410).json({
+        error: "claim_superseded",
+        message: "The claim attempt token is invalid or has been superseded.",
+      });
+      return;
+    }
+    if (registration.status === "claimed") {
+      res
+        .status(409)
+        .json({ error: "claim_completed", message: "Already claimed." });
+      return;
+    }
+    const viewExpires = registration.claim?.attempt?.view_expires_at;
+    if (!viewExpires || viewExpires.getTime() < Date.now()) {
+      res
+        .status(410)
+        .json({ error: "claim_expired", message: "Claim window has closed." });
+      return;
+    }
+    const { otp, expiresAt } = generateOtpForRegistration(registration);
+    console.log(
+      `[agent-auth] generated otp for registration=${registration.id}`,
+    );
+    res.json({
+      type: "otp",
+      challenge: otp,
+      expires_at: expiresAt.toISOString(),
     });
-    return;
-  }
-  if (registration.status === "claimed") {
-    res
-      .status(409)
-      .json({ error: "claim_completed", message: "Already claimed." });
-    return;
-  }
-  const viewExpires = registration.claim?.attempt?.view_expires_at;
-  if (!viewExpires || viewExpires.getTime() < Date.now()) {
-    res
-      .status(410)
-      .json({ error: "claim_expired", message: "Claim window has closed." });
-    return;
-  }
-  const { otp, expiresAt } = generateOtpForRegistration(registration);
-  console.log(`[agent-auth] generated otp for registration=${registration.id}`);
-  res.json({
-    type: "otp",
-    challenge: otp,
-    expires_at: expiresAt.toISOString(),
-  });
-});
+  },
+);
 
-agentAuthRouter.post(`${config.claimEndpointPath}/complete`, async (req, res) => {
-  const parsed = parseBody(claimCompleteBody, req.body);
-  if (!parsed.ok) {
-    res.status(400).json({ error: "invalid_request", message: parsed.message });
-    return;
-  }
-  const registration = findRegistrationByClaimHash(
-    sha256Hex(parsed.value.claim_token),
-  );
-  if (!registration) {
-    res.status(401).json({
-      error: "invalid_claim_token",
-      message: "The claim token is invalid.",
-    });
-    return;
-  }
+agentAuthRouter.post(
+  `${config.claimEndpointPath}/complete`,
+  async (req, res) => {
+    const parsed = parseBody(claimCompleteBody, req.body);
+    if (!parsed.ok) {
+      res
+        .status(400)
+        .json({ error: "invalid_request", message: parsed.message });
+      return;
+    }
+    const registration = findRegistrationByClaimHash(
+      sha256Hex(parsed.value.claim_token),
+    );
+    if (!registration) {
+      res.status(401).json({
+        error: "invalid_claim_token",
+        message: "The claim token is invalid.",
+      });
+      return;
+    }
 
-  const result = completeClaim(registration, parsed.value.otp);
-  if (!result.ok) {
-    const status = pickStatusForCompleteError(result.error);
-    res
-      .status(status)
-      .json({ error: result.error, message: humanCompleteError(result.error) });
-    return;
-  }
+    const result = completeClaim(registration, parsed.value.otp);
+    if (!result.ok) {
+      const status = pickStatusForCompleteError(result.error);
+      res.status(status).json({
+        error: result.error,
+        message: humanCompleteError(result.error),
+      });
+      return;
+    }
 
-  console.log(
-    `[agent-auth] claim completed for registration=${result.registration.id}`,
-  );
+    console.log(
+      `[agent-auth] claim completed for registration=${result.registration.id}`,
+    );
 
-  res.json(await buildCompleteResponse(result.registration));
-});
+    res.json(await buildCompleteResponse(result.registration));
+  },
+);
 
 function pickStatusForCompleteError(error: string): number {
   switch (error) {
@@ -593,11 +611,7 @@ const SET_EVENT_HANDLERS: Record<string, (claims: SetClaims) => void> = {
   "https://schemas.workos.com/events/agent/identity/assertion/revoked": (
     claims,
   ) => {
-    const count = revokeForDelegation(
-      claims.iss,
-      claims.sub ?? "",
-      claims.aud,
-    );
+    const count = revokeForDelegation(claims.iss, claims.sub ?? "", claims.aud);
     console.log(
       `[event] identity-assertion-revoked: revoked ${count} credentials for iss=${claims.iss} sub=${claims.sub}`,
     );
@@ -621,9 +635,10 @@ agentAuthRouter.post(
     }
     const verified = await verifySet(token);
     if (!verified.ok) {
-      res
-        .status(400)
-        .json({ err: verified.error.code, description: verified.error.message });
+      res.status(400).json({
+        err: verified.error.code,
+        description: verified.error.message,
+      });
       return;
     }
     for (const schemaUri of Object.keys(verified.claims.events)) {

@@ -285,9 +285,7 @@ export function createAnonymousRegistration(): {
 // Email-verification registrations bundle the claim attempt: the ceremony
 // is initiated synchronously with registration creation, so the agent can
 // poll /complete directly without an intermediate /claim call.
-export function createEmailVerificationRegistration(input: {
-  email: string;
-}): {
+export function createEmailVerificationRegistration(input: { email: string }): {
   registration: Registration;
   claimTokenPlaintext: string;
   claimViewTokenPlaintext: string;

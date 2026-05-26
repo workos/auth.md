@@ -61,8 +61,7 @@ export async function mintLogoutJwt(input: {
     jti: randomUUID(),
     iat: Math.floor(Date.now() / 1000),
     events: {
-      "https://schemas.workos.com/events/agent/identity/assertion/revoked":
-        {},
+      "https://schemas.workos.com/events/agent/identity/assertion/revoked": {},
     },
   };
   return sign(payload, "secevent+jwt");
