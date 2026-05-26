@@ -124,7 +124,7 @@ function renderHtml(): string {
 
 <section id="step-3" class="track-anon" hidden>
   <h2><span class="num">3</span>Register anonymously</h2>
-  <p>An agent without a user identity POSTs <code>{ "type": "anonymous" }</code>. The service issues a credential with pre-claim scopes and returns a claim_token for the human-handoff ceremony.</p>
+  <p>An agent without a user identity POSTs <code>{ "type": "anonymous" }</code>. The service returns an <code>identity_assertion</code> (a service-signed ID-JAG) plus a <code>claim_token</code> for the human-handoff ceremony. No credential yet — the agent will exchange the assertion at <code>/oauth2/token</code> next.</p>
   <div class="label">Request</div>
   <div class="req"><pre>POST /agent/auth
 Content-Type: application/json
@@ -135,9 +135,9 @@ Content-Type: application/json
 </section>
 
 <section id="step-4" class="track-anon" hidden>
-  <h2><span class="num">4</span>Call with the pre-claim credential</h2>
-  <p>The credential works immediately, but only with the scopes configured for unclaimed registrations (here: <code>api.read</code>).</p>
-  <button class="primary" type="button" data-action="anon-call-pre">Call /api/resource</button>
+  <h2><span class="num">4</span>Exchange the assertion for a credential</h2>
+  <p>The agent POSTs the <code>identity_assertion</code> to <code>/oauth2/token</code> via the RFC 7523 JWT-bearer grant. The service returns an <code>access_token</code> at the pre-claim scope set (here: <code>api.read</code>), and the agent uses it to call <code>/api/resource</code>.</p>
+  <button class="primary" type="button" data-action="anon-call-pre">Exchange &amp; call</button>
   <div id="anon-pre-out"></div>
 </section>
 
@@ -161,7 +161,7 @@ Content-Type: application/json
 
 <section id="step-7" class="track-anon" hidden>
   <h2><span class="num">7</span>Complete the claim</h2>
-  <p>The agent POSTs the OTP it heard from the user to <code>/agent/auth/claim/complete</code>. The pre-claim credential keeps working — its scopes are upgraded in place.</p>
+  <p>The agent POSTs the OTP it heard from the user to <code>/agent/auth/claim/complete</code>. The pre-claim access_token keeps working — its scopes are upgraded in place on the credential issued in step 4.</p>
   <label>OTP from user
     <input id="anon-otp" class="otp" placeholder="123456" maxlength="6">
   </label>
@@ -202,8 +202,8 @@ Content-Type: application/json
 </section>
 
 <section id="step-11" class="track-email" hidden>
-  <h2><span class="num">11</span>Complete the claim, receive a credential</h2>
-  <p>The agent POSTs the OTP to <code>/agent/auth/claim/complete</code>. Unlike anonymous, this is when the credential is issued — the registration response had no key.</p>
+  <h2><span class="num">11</span>Complete the claim, receive an identity_assertion</h2>
+  <p>The agent POSTs the OTP to <code>/agent/auth/claim/complete</code>. The service marks the registration claimed and returns a service-signed <code>identity_assertion</code> the agent will exchange for a credential next.</p>
   <label>OTP from user
     <input id="email-otp" class="otp" placeholder="123456" maxlength="6">
   </label>
@@ -214,8 +214,9 @@ Content-Type: application/json
 </section>
 
 <section id="step-12" class="track-email" hidden>
-  <h2><span class="num">12</span>Call /api/resource with the new credential</h2>
-  <button class="primary" type="button" data-action="email-call">Call /api/resource</button>
+  <h2><span class="num">12</span>Exchange the assertion and call /api/resource</h2>
+  <p>The agent POSTs the <code>identity_assertion</code> to <code>/oauth2/token</code> and uses the resulting access_token to call the protected API.</p>
+  <button class="primary" type="button" data-action="email-call">Exchange &amp; call</button>
   <div id="email-call-out"></div>
 </section>
 
@@ -225,8 +226,8 @@ Content-Type: application/json
 <p class="track-header ia" id="track-c-header" hidden>Track C — ID-JAG identity assertion</p>
 
 <section id="step-13" hidden>
-  <h2><span class="num">13</span>Exchange an ID-JAG for credentials</h2>
-  <p>Paste an ID-JAG minted by the provider (run the <a href="${providerHint}" target="_blank">provider demo</a> through step 5, then copy the <code>assertion</code> value). The consumer verifies the signature against the provider's JWKS, enforces replay protection, and matches or provisions a user.</p>
+  <h2><span class="num">13</span>Exchange an ID-JAG for a service identity_assertion</h2>
+  <p>Paste an ID-JAG minted by the provider (run the <a href="${providerHint}" target="_blank">provider demo</a> through step 5, then copy the <code>assertion</code> value). The consumer verifies the signature against the provider's JWKS, enforces replay protection, matches or provisions a user, and returns a service-signed <code>identity_assertion</code> bound to the registration.</p>
   <label>ID-JAG assertion
     <textarea id="assertion" placeholder="eyJhbGc..."></textarea>
   </label>
@@ -237,11 +238,11 @@ Content-Type: application/json
 </section>
 
 <section id="step-14" hidden>
-  <h2><span class="num">14</span>Call <code>/api/resource</code> with the credential</h2>
-  <p>With a valid credential, the agent can now call the protected API. The response echoes back the resolved user and credential metadata.</p>
+  <h2><span class="num">14</span>Exchange the assertion at <code>/oauth2/token</code> and call <code>/api/resource</code></h2>
+  <p>The agent POSTs the service-signed <code>identity_assertion</code> to <code>/oauth2/token</code> (RFC 7523 JWT-bearer grant) to mint an access_token, then uses it against the protected API. The response echoes back the resolved user and credential metadata.</p>
   <div class="label">Request</div>
   <div class="req" id="call-req"><pre></pre></div>
-  <button class="primary" type="button" data-action="call">Call /api/resource</button>
+  <button class="primary" type="button" data-action="call">Exchange &amp; call</button>
   <div id="call-out"></div>
   <p class="note" style="margin-top:1rem">Revocation is driven from the provider side — see the provider demo's step 7. When the provider POSTs a <code>logout+jwt</code> to this consumer's <code>/agent/auth/revoke</code>, credentials for that <code>(iss, sub, aud)</code> are marked revoked. Re-clicking the call button will start returning 401.</p>
 </section>
@@ -404,6 +405,29 @@ async function discoverAs() {
   reveal("step-3");
 }
 
+async function exchangeForToken(assertion) {
+  const params = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion,
+  });
+  const resp = await fetch("/oauth2/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+  const text = await resp.text();
+  let body; try { body = text ? JSON.parse(text) : ""; } catch { body = text; }
+  return { status: resp.status, ok: resp.ok, body };
+}
+
+function tokenAndResourceBlocks(tokResp, resResp) {
+  const tokenLabel = '<div class="label">POST /oauth2/token</div>';
+  const resLabel = '<div class="label">GET /api/resource</div>';
+  const tokenBlock = tokenLabel + resBlock(tokResp.status, null, tokResp.body, tokResp.ok);
+  if (!resResp) return tokenBlock;
+  return tokenBlock + resLabel + resBlock(resResp.status, null, resResp.body, resResp.ok);
+}
+
 async function anonRegister() {
   const r = await jsonFetch("/agent/auth", {
     method: "POST",
@@ -411,7 +435,7 @@ async function anonRegister() {
   });
   document.getElementById("anon-register-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
-  state.anon_credential = r.body.credential;
+  state.anon_identity_assertion = r.body.identity_assertion;
   state.anon_claim_token = r.body.claim_token;
   state.anon_registration_id = r.body.registration_id;
   updateAnonClaimPreview();
@@ -421,11 +445,17 @@ async function anonRegister() {
 }
 
 async function anonCallPre() {
-  const r = await jsonFetch("/api/resource", {
+  const tokResp = await exchangeForToken(state.anon_identity_assertion);
+  if (!tokResp.ok) {
+    document.getElementById("anon-pre-out").innerHTML = tokenAndResourceBlocks(tokResp, null);
+    return;
+  }
+  state.anon_credential = tokResp.body.access_token;
+  const resResp = await jsonFetch("/api/resource", {
     headers: { authorization: "Bearer " + state.anon_credential },
   });
-  document.getElementById("anon-pre-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
-  if (r.ok) { markDone("step-4"); reveal("step-5"); }
+  document.getElementById("anon-pre-out").innerHTML = tokenAndResourceBlocks(tokResp, resResp);
+  if (resResp.ok) { markDone("step-4"); reveal("step-5"); }
 }
 
 async function anonClaim() {
@@ -492,18 +522,24 @@ async function emailComplete() {
   const r = await jsonFetch("/agent/auth/claim/complete", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("email-complete-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
-  state.email_credential = r.body.credential;
+  state.email_identity_assertion = r.body.identity_assertion;
   markDone("step-10");
   markDone("step-11");
   reveal("step-12");
 }
 
 async function emailCall() {
-  const r = await jsonFetch("/api/resource", {
+  const tokResp = await exchangeForToken(state.email_identity_assertion);
+  if (!tokResp.ok) {
+    document.getElementById("email-call-out").innerHTML = tokenAndResourceBlocks(tokResp, null);
+    return;
+  }
+  state.email_credential = tokResp.body.access_token;
+  const resResp = await jsonFetch("/api/resource", {
     headers: { authorization: "Bearer " + state.email_credential },
   });
-  document.getElementById("email-call-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
-  if (r.ok) markDone("step-12");
+  document.getElementById("email-call-out").innerHTML = tokenAndResourceBlocks(tokResp, resResp);
+  if (resResp.ok) markDone("step-12");
 }
 
 async function exchange() {
@@ -521,18 +557,24 @@ async function exchange() {
   const r = await jsonFetch("/agent/auth", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("exchange-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
-  state.credential = r.body.credential;
+  state.identity_assertion = r.body.identity_assertion;
   updateCallPreview();
   markDone("step-13");
   reveal("step-14");
 }
 
 async function call() {
-  const r = await jsonFetch("/api/resource", {
+  const tokResp = await exchangeForToken(state.identity_assertion);
+  if (!tokResp.ok) {
+    document.getElementById("call-out").innerHTML = tokenAndResourceBlocks(tokResp, null);
+    return;
+  }
+  state.credential = tokResp.body.access_token;
+  const resResp = await jsonFetch("/api/resource", {
     headers: { authorization: "Bearer " + state.credential },
   });
-  document.getElementById("call-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
-  if (r.ok) markDone("step-14");
+  document.getElementById("call-out").innerHTML = tokenAndResourceBlocks(tokResp, resResp);
+  if (resResp.ok) markDone("step-14");
 }
 </script>
 </body></html>`;

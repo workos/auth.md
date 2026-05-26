@@ -461,7 +461,7 @@ export function generateOtpForRegistration(registration: Registration): {
 }
 
 export type CompleteClaimResult =
-  | { ok: true; registration: Registration; credential?: Credential }
+  | { ok: true; registration: Registration }
   | {
       ok: false;
       error:
@@ -549,17 +549,7 @@ function completeEmailVerificationClaim(
     user = createUser({ email, email_verified: true });
   }
   markClaimed(registration, user.id);
-
-  // Credential issuance via /complete is a legacy code path; the new model
-  // issues credentials only at /token. This is preserved here so the
-  // existing /agent/auth flow still returns a usable credential.
-  const credential = issueAccessToken({
-    source: "email_verification",
-    scope: config.postClaimScopes,
-    userId: user.id,
-    registrationId: registration.id,
-  });
-  return { ok: true, registration, credential };
+  return { ok: true, registration };
 }
 
 function completeIdJagClaim(registration: Registration): CompleteClaimResult {
@@ -580,15 +570,5 @@ function completeIdJagClaim(registration: Registration): CompleteClaimResult {
 
   upsertDelegation(idJag.iss, idJag.sub, user.id);
   markClaimed(registration, user.id);
-
-  const credential = issueAccessToken({
-    source: "identity_assertion",
-    scope: config.scopesSupported,
-    userId: user.id,
-    iss: idJag.iss,
-    sub: idJag.sub,
-    aud: idJag.aud,
-    registrationId: registration.id,
-  });
-  return { ok: true, registration, credential };
+  return { ok: true, registration };
 }

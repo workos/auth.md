@@ -21,12 +21,15 @@ import {
   findRegistrationByClaimHash,
   findRegistrationByClaimViewHash,
   generateOtpForRegistration,
-  issueAccessToken,
   recordAnonymousClaimAttempt,
   revokeForDelegation,
   sha256Hex,
 } from "../store.js";
-import { verifyIdJag, verifyLogoutJwt } from "../verify.js";
+import {
+  signServiceIdJag,
+  verifyIdJag,
+  verifyLogoutJwt,
+} from "../verify.js";
 
 // Agent-facing endpoints implementing the OTP-exchange flavor of the
 // agent-auth spec. The user-facing /agent/auth/claim/view endpoint at the
@@ -51,20 +54,16 @@ agentAuthRouter.post("/agent/auth", async (req, res) => {
 
   // type === "anonymous"
   const { registration, claimTokenPlaintext } = createAnonymousRegistration();
-  const credential = issueAccessToken({
-    scope: config.preClaimScopes,
-    source: "anonymous",
-    registrationId: registration.id,
-  });
+  const { jwt, expiresAt } = await signServiceIdJag({ registration });
   console.log(
     `[agent-auth] registered anonymous agent registration=${registration.id}`,
   );
   res.json({
     registration_id: registration.id,
     registration_type: "anonymous",
-    credential: credential.token,
-    credential_expires: credential.expires_at?.toISOString() ?? null,
-    scopes: credential.scope,
+    identity_assertion: jwt,
+    assertion_expires: expiresAt.toISOString(),
+    pre_claim_scopes: config.preClaimScopes,
     claim_url: `${config.baseUrl}/agent/auth/claim`,
     claim_token: claimTokenPlaintext,
     claim_token_expires: registration.claim!.expires_at.toISOString(),
@@ -144,23 +143,20 @@ async function handleIdJagAssertion(
     userId: user.id,
   });
 
-  const cred = issueAccessToken({
-    userId: user.id,
-    scope,
-    source: "identity_assertion",
-    iss: claims.iss,
-    sub: claims.sub,
-    aud: claims.aud,
-    registrationId: registration.id,
+  const { jwt, expiresAt } = await signServiceIdJag({
+    registration,
+    email: claims.email,
+    emailVerified: claims.email_verified,
+    amr: claims.amr,
   });
   console.log(
-    `[agent-auth] issued access_token to user=${user.id} via iss=${claims.iss} sub=${claims.sub} registration=${registration.id}`,
+    `[agent-auth] issued identity_assertion to user=${user.id} via iss=${claims.iss} sub=${claims.sub} registration=${registration.id}`,
   );
   res.json({
     registration_id: registration.id,
     registration_type: "agent-provider",
-    credential: cred.token,
-    credential_expires: cred.expires_at?.toISOString() ?? null,
+    identity_assertion: jwt,
+    assertion_expires: expiresAt.toISOString(),
     scopes: scope,
   });
 }
@@ -328,7 +324,7 @@ agentAuthRouter.post("/agent/auth/claim/attempt/challenge", (req, res) => {
   });
 });
 
-agentAuthRouter.post("/agent/auth/claim/complete", (req, res) => {
+agentAuthRouter.post("/agent/auth/claim/complete", async (req, res) => {
   const parsed = parseBody(claimCompleteBody, req.body);
   if (!parsed.ok) {
     res.status(400).json({ error: "invalid_request", message: parsed.message });
@@ -358,7 +354,7 @@ agentAuthRouter.post("/agent/auth/claim/complete", (req, res) => {
     `[agent-auth] claim completed for registration=${result.registration.id}`,
   );
 
-  res.json(buildCompleteResponse(result.registration, result.credential));
+  res.json(await buildCompleteResponse(result.registration));
 });
 
 function pickStatusForCompleteError(error: string): number {
@@ -394,25 +390,28 @@ function humanCompleteError(error: string): string {
   }
 }
 
-function buildCompleteResponse(
+async function buildCompleteResponse(
   registration: Registration,
-  credential: ReturnType<typeof issueAccessToken> | undefined,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const base: Record<string, unknown> = {
     registration_id: registration.id,
     status: "claimed",
   };
-  // Email-verification and id_jag registrations receive a fresh credential
-  // at /complete. Anonymous registrations get an in-place scope upgrade on
-  // their existing credential — same token, wider scopes.
+  // Email-verification and id_jag registrations get a fresh identity_assertion
+  // at /complete to use at /token. Anonymous registrations don't need one
+  // here — they received it from /agent/auth at registration time and any
+  // credentials minted from it get an in-place scope upgrade.
   if (
-    credential &&
-    (registration.kind === "email_verification" ||
-      registration.kind === "id_jag")
+    registration.kind === "email_verification" ||
+    registration.kind === "id_jag"
   ) {
-    base.credential = credential.token;
-    base.credential_expires = credential.expires_at?.toISOString() ?? null;
-    base.scopes = credential.scope;
+    const { jwt, expiresAt } = await signServiceIdJag({
+      registration,
+      email: registration.claim?.email,
+      emailVerified: registration.claim?.email ? true : undefined,
+    });
+    base.identity_assertion = jwt;
+    base.assertion_expires = expiresAt.toISOString();
   }
   return base;
 }

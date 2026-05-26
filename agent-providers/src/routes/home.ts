@@ -128,12 +128,12 @@ function renderHtml(seeded: { email: string; name: string }[]): string {
 </section>
 
 <section id="step-5" hidden>
-  <h2><span class="num">5</span>Exchange for credentials at consumer</h2>
-  <p>With a valid ID-JAG, the agent POSTs it to the consumer's <code>/agent/auth</code> endpoint. The consumer verifies the signature against <em>this</em> provider's JWKS and returns credentials for the matched user. Requires the consumer sample running at the audience URL.</p>
+  <h2><span class="num">5</span>Exchange for an identity_assertion at the consumer</h2>
+  <p>With a valid ID-JAG, the agent POSTs it to the consumer's <code>/agent/auth</code> endpoint. The consumer verifies the signature against <em>this</em> provider's JWKS, matches or provisions a user, and returns a service-signed <code>identity_assertion</code>. The agent then trades that assertion at the consumer's <code>/oauth2/token</code> (RFC 7523 JWT-bearer) for an access_token and calls <code>/api/resource</code>. Requires the consumer sample running at the audience URL.</p>
   <div class="label">Request</div>
   <div class="req" id="exchange-req"><pre></pre></div>
   <button class="primary" type="button" data-action="exchange">Exchange at consumer</button>
-  <button type="button" data-action="call-resource" id="call-resource" disabled>Call /api/resource with credential</button>
+  <button type="button" data-action="call-resource" id="call-resource" disabled>Exchange token &amp; call /api/resource</button>
   <div id="exchange-out"></div>
 </section>
 
@@ -383,13 +383,43 @@ async function exchange() {
   }
   document.getElementById("exchange-out").innerHTML = resBlock(r.status, r.body, r.ok);
   if (!r.ok) return;
-  state.credential = r.body.credential;
-  document.getElementById("call-resource").disabled = !state.credential;
+  state.identity_assertion = r.body.identity_assertion;
+  document.getElementById("call-resource").disabled = !state.identity_assertion;
   markDone("step-5");
   reveal("step-6");
 }
 
 async function callResource() {
+  // RFC 7523 JWT-bearer exchange: trade the service-signed identity_assertion
+  // for a short-lived access_token, then use that access_token at the API.
+  const tokenUrl = state.audience + "/oauth2/token";
+  const tokenParams = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion: state.identity_assertion,
+  });
+  let tokR;
+  try {
+    const resp = await fetch(tokenUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: tokenParams.toString(),
+    });
+    const text = await resp.text();
+    let respBody; try { respBody = text ? JSON.parse(text) : ""; } catch { respBody = text; }
+    tokR = { status: resp.status, ok: resp.ok, body: respBody };
+  } catch (err) {
+    document.getElementById("exchange-out").innerHTML +=
+      '<div class="label">POST /oauth2/token → FAIL</div>' +
+      '<div class="res error"><pre>' + escapeHtml(err.message || String(err)) + '</pre></div>';
+    return;
+  }
+  document.getElementById("exchange-out").innerHTML +=
+    '<div class="label">POST /oauth2/token → ' + tokR.status + '</div>' +
+    '<div class="' + (tokR.ok ? 'res' : 'res error') + '"><pre>' +
+    escapeHtml(jsonStr(tokR.body)) + '</pre></div>';
+  if (!tokR.ok) return;
+  state.credential = tokR.body.access_token;
+
   const url = state.audience + "/api/resource";
   let r;
   try {
