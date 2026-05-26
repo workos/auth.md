@@ -31,7 +31,7 @@ Service at <http://localhost:8000>, provider at <http://localhost:4000>. The ser
 
 ## System Flows
 
-Three registration flows share the `/agent/auth` endpoint. Pick the one that matches what the agent has on hand.
+Three registration flows share the `/agent/register` endpoint. Pick the one that matches what the agent has on hand. All three converge at `/oauth2/token`, which exchanges a service-signed identity assertion for an access_token via [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) JWT-bearer grant.
 
 ### Discovery
 
@@ -43,24 +43,26 @@ Hosted at `/.well-known/oauth-authorization-server`:
   "authorization_servers": ["https://auth.service.com/"],
   "scopes_supported": ["api.read", "api.write"],
   "bearer_methods_supported": ["header"],
+
+  "issuer": "https://auth.service.com",
+  "token_endpoint": "https://auth.service.com/oauth2/token",
+  "revocation_endpoint": "https://auth.service.com/oauth2/revoke",
+  "grant_types_supported": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
+
   "agent_auth": {
     "skill": "https://service.com/auth.md",
-    "register_uri": "https://auth.service.com/agent/auth",
-    "claim_uri": "https://auth.service.com/agent/auth/claim",
-    "revocation_uri": "https://auth.service.com/agent/auth/revoke",
+    "registration_endpoint": "https://auth.service.com/agent/register",
+    "claim_endpoint": "https://auth.service.com/agent/register/claim",
+    "events_endpoint": "https://auth.service.com/agent/event/notify",
     "identity_types_supported": ["anonymous", "identity_assertion"],
-    "anonymous": {
-      "credential_types_supported": ["api_key"]
-    },
     "identity_assertion": {
       "assertion_types_supported": [
         "urn:ietf:params:oauth:token-type:id-jag",
         "verified_email"
-      ],
-      "credential_types_supported": ["access_token", "api_key"]
+      ]
     },
     "events_supported": [
-      "https://schemas.workos.com/events/agent/auth/identity/assertion/revoked"
+      "https://schemas.workos.com/events/agent/identity/assertion/revoked"
     ]
   }
 }
@@ -89,11 +91,40 @@ sequenceDiagram
     Agent->>Provider: Request audience-specific ID-JAG
     Provider-->>Agent: 200 OK (ID-JAG)
 
-    Agent->>Service: POST /agent/auth<br/>{ type: identity_assertion, assertion: ID-JAG }
+    Agent->>Service: POST /agent/register<br/>{ type: identity_assertion, assertion: ID-JAG }
     Service->>Provider: GET /.well-known/jwks.json
     Provider-->>Service: 200 OK (JSON Web Key Set)
     Service->>Service: Verify signature + claims, match user
-    Service-->>Agent: 200 OK (credentials)
+    Service-->>Agent: 200 OK (identity_assertion)
+    Agent->>Service: POST /oauth2/token<br/>grant_type=jwt-bearer&assertion=...
+    Service-->>Agent: 200 OK (access_token)
+```
+
+### Anonymous Registration + OTP Claim
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Agent
+    participant Service
+
+    Agent->>Service: POST /agent/register<br/>{ type: anonymous }
+    Service->>Service: Create agent principal, claim record
+    Service-->>Agent: 200 OK (identity_assertion, claim_token)
+    Agent->>Service: POST /oauth2/token<br/>grant_type=jwt-bearer&assertion=...
+    Service-->>Agent: 200 OK (access_token at pre-claim scopes)
+
+    Note over Agent: Agent operates with pre-claim scopes
+
+    User-->>Agent: Wants to take ownership
+    Agent->>Service: POST /agent/register/claim<br/>{ claim_token, email }
+    Service->>User: Send claim-view email (one-time URL)
+    User->>Service: GET /agent/register/claim/view?token=...
+    Service-->>User: 6-digit OTP page
+    User-->>Agent: Reads OTP back
+    Agent->>Service: POST /agent/register/claim/complete<br/>{ claim_token, otp }
+    Service->>Service: Upgrade scope of access_tokens issued from this registration
+    Service-->>Agent: 200 OK { status: claimed }
 ```
 
 ### Verified-Email Identity Assertion
@@ -104,37 +135,14 @@ sequenceDiagram
     participant Agent
     participant Service
 
-    Agent->>Service: POST /agent/auth<br/>{ type: identity_assertion, assertion_type: verified_email, assertion: email }
+    Agent->>Service: POST /agent/register<br/>{ type: identity_assertion, assertion_type: verified_email, assertion: email }
     Service->>User: Send claim-view email (one-time URL)
-    Service-->>Agent: 200 OK (claim_token, no credential)
-    User->>Service: GET /agent/auth/claim/view?token=...
+    Service-->>Agent: 200 OK (claim_token, no identity_assertion yet)
+    User->>Service: GET /agent/register/claim/view?token=...
     Service-->>User: 6-digit OTP page
     User-->>Agent: Reads OTP back
-    Agent->>Service: POST /agent/auth/claim/complete<br/>{ claim_token, otp }
-    Service-->>Agent: 200 OK (credential)
-```
-
-### Anonymous Registration with OTP Claim
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant Agent
-    participant Service
-
-    Agent->>Service: POST /agent/auth<br/>{ type: anonymous, requested_credential_type: api_key }
-    Service->>Service: Create agent principal, scoped API key, claim record
-    Service-->>Agent: 200 OK (api_key, claim_token)
-
-    Note over Agent: Agent operates with pre-claim scopes
-
-    User-->>Agent: Wants to take ownership
-    Agent->>Service: POST /agent/auth/claim<br/>{ claim_token, email }
-    Service->>User: Send claim-view email (one-time URL)
-    User->>Service: GET /agent/auth/claim/view?token=...
-    Service-->>User: 6-digit OTP page
-    User-->>Agent: Reads OTP back
-    Agent->>Service: POST /agent/auth/claim/complete<br/>{ claim_token, otp }
-    Service->>Service: Swap API key perms (pre-claim → post-claim)
-    Service-->>Agent: 200 OK { status: claimed }
+    Agent->>Service: POST /agent/register/claim/complete<br/>{ claim_token, otp }
+    Service-->>Agent: 200 OK (identity_assertion)
+    Agent->>Service: POST /oauth2/token<br/>grant_type=jwt-bearer&assertion=...
+    Service-->>Agent: 200 OK (access_token)
 ```
