@@ -51,10 +51,10 @@ Discovery is two-hop:
 
    ```json
    {
-     "resource": "https://api.service.com/",
+     "resource": "https://api.service.example.com/",
      "resource_name": "Service",
-     "resource_logo_uri": "https://service.com/logo.png",
-     "authorization_servers": ["https://auth.service.com/"],
+     "resource_logo_uri": "https://service.example.com/logo.png",
+     "authorization_servers": ["https://auth.service.example.com/"],
      "scopes_supported": ["api.read", "api.write"],
      "bearer_methods_supported": ["header"]
    }
@@ -64,15 +64,15 @@ Discovery is two-hop:
 
    ```json
    {
-     "resource": "https://api.service.com/",
-     "authorization_servers": ["https://auth.service.com/"],
+     "resource": "https://api.service.example.com/",
+     "authorization_servers": ["https://auth.service.example.com/"],
      "scopes_supported": ["api.read", "api.write"],
      "bearer_methods_supported": ["header"],
      "agent_auth": {
-       "skill": "https://service.com/auth.md",
-       "register_uri": "https://auth.service.com/agent/auth",
-       "claim_uri": "https://auth.service.com/agent/auth/claim",
-       "revocation_uri": "https://auth.service.com/agent/auth/revoke",
+       "skill": "https://service.example.com/auth.md",
+       "register_uri": "https://auth.service.example.com/agent/auth",
+       "claim_uri": "https://auth.service.example.com/agent/auth/claim",
+       "revocation_uri": "https://auth.service.example.com/agent/auth/revoke",
        "identity_types_supported": ["anonymous", "identity_assertion"],
        "anonymous": {
          "credential_types_supported": ["api_key"]
@@ -102,9 +102,9 @@ Discovery is two-hop:
 .
 {
   // required
-  "iss": "https://api.agent-provider.com",
+  "iss": "https://api.agent-provider.example.com",
   "sub": "<opaque user identifier>",
-  "aud": "https://auth.service.com",
+  "aud": "https://auth.service.example.com",
   "client_id": "<iss or CIMD URL>",
   "jti": "<unique identifier for the token to prevent replay>",
   "iat": <issuance epoch seconds>,
@@ -118,7 +118,7 @@ Discovery is two-hop:
   "name": "Jane Smith",
 	"phone_number": "+15553805188",
 	"phone_number_verified": false,
-	"resource": "https://api.service.com",
+	"resource": "https://api.service.example.com",
 
   // optional agent metadata
   "agent_platform": "<your-agent-surface>",
@@ -134,14 +134,14 @@ In order for consuming services to verify the ID-JAG tokens, agent providers mus
 
 ```json
 {
-  "client_id": "https://api.agent-provider.com/agent-auth.json",
+  "client_id": "https://api.agent-provider.example.com/agent-auth.json",
   "client_name": "Agent Provider",
-  "logo_uri": "https://agent-provider.com/logo.png",
-  "client_uri": "https://agent-provider.com",
-  "tos_uri": "https://agent-provider.com/tos",
-  "policy_uri": "https://agent-provider.com/privacy",
+  "logo_uri": "https://agent-provider.example.com/logo.png",
+  "client_uri": "https://agent-provider.example.com",
+  "tos_uri": "https://agent-provider.example.com/tos",
+  "policy_uri": "https://agent-provider.example.com/privacy",
   "token_endpoint_auth_method": "private_key_jwt",
-  "jwks_uri": "https://agent-provider.com/.well-known/jwks.json",
+  "jwks_uri": "https://agent-provider.example.com/.well-known/jwks.json",
   "scope": "openid email profile"
 }
 ```
@@ -152,7 +152,7 @@ Once the ID-JAG is minted, the agent can exchange it for service credentials:
 
 ```json
 POST /agent/auth HTTP/1.1
-Host: auth.service.com
+Host: auth.service.example.com
 Content-Type: application/json
 
 Payload:
@@ -217,7 +217,7 @@ In a robust implementation, agent providers will want to track the services to w
 
 ```json
 POST /agent/auth/revoke HTTP/1.1
-Host: auth.service.com
+Host: auth.service.example.com
 Content-Type: application/logout+jwt
 
 // header
@@ -229,9 +229,9 @@ Content-Type: application/logout+jwt
 .
 // payload
 {
-  "iss": "https://api.agent-provider.com",
+  "iss": "https://api.agent-provider.example.com",
   "sub": "<opaque user identifier>",
-  "aud": "https://auth.service.com",
+  "aud": "https://auth.service.example.com",
   "jti": "<unique identifier to prevent replay>",
   "iat": <epoch seconds>,
   "events": {

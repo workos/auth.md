@@ -2,7 +2,7 @@
 
 You are an agent. This service supports **agentic registration**: discover → register → (claim if needed) → call API → handle revocation. Follow the steps in order; do not skip ahead.
 
-Examples use placeholder hosts: `https://api.service.com` (the resource server hosting the API you want to call) and `https://auth.service.com` (the authorization server that handles registration). Real services substitute their own.
+Examples use placeholder hosts: `https://api.service.example.com` (the resource server hosting the API you want to call) and `https://auth.service.example.com` (the authorization server that handles registration). Real services substitute their own.
 
 ## Step 1 — Discover
 
@@ -12,7 +12,7 @@ The 401 response that pointed you here also carries a `WWW-Authenticate` header 
 
 ```http
 HTTP/1.1 401 Unauthorized
-WWW-Authenticate: Bearer resource_metadata="https://api.service.com/.well-known/oauth-protected-resource"
+WWW-Authenticate: Bearer resource_metadata="https://api.service.example.com/.well-known/oauth-protected-resource"
 ```
 
 Pull the `resource_metadata` value from that header and fetch it (1a). If you don't have the 401 in hand, the conventional path on the resource server is `/.well-known/oauth-protected-resource`.
@@ -27,10 +27,10 @@ Response shape:
 
 ```json
 {
-  "resource": "https://api.service.com/",
+  "resource": "https://api.service.example.com/",
   "resource_name": "Service",
-  "resource_logo_uri": "https://service.com/logo.png",
-  "authorization_servers": ["https://auth.service.com/"],
+  "resource_logo_uri": "https://service.example.com/logo.png",
+  "authorization_servers": ["https://auth.service.example.com/"],
   "scopes_supported": ["api.read", "api.write"],
   "bearer_methods_supported": ["header"]
 }
@@ -54,15 +54,15 @@ Response shape:
 
 ```json
 {
-  "resource": "https://api.service.com/",
-  "authorization_servers": ["https://auth.service.com/"],
+  "resource": "https://api.service.example.com/",
+  "authorization_servers": ["https://auth.service.example.com/"],
   "scopes_supported": ["api.read", "api.write"],
   "bearer_methods_supported": ["header"],
   "agent_auth": {
-    "skill": "https://service.com/auth.md",
-    "register_uri": "https://auth.service.com/agent/auth",
-    "claim_uri": "https://auth.service.com/agent/auth/claim",
-    "revocation_uri": "https://auth.service.com/agent/auth/revoke",
+    "skill": "https://service.example.com/auth.md",
+    "register_uri": "https://auth.service.example.com/agent/auth",
+    "claim_uri": "https://auth.service.example.com/agent/auth/claim",
+    "revocation_uri": "https://auth.service.example.com/agent/auth/revoke",
     "identity_types_supported": ["anonymous", "identity_assertion"],
     "anonymous": {
       "credential_types_supported": ["api_key"]
@@ -166,7 +166,7 @@ Response (200):
 {
   "registration_id": "reg_...",
   "registration_type": "email-verification",
-  "claim_url": "https://auth.service.com/agent/auth/claim",
+  "claim_url": "https://auth.service.example.com/agent/auth/claim",
   "claim_token": "clm_...",
   "claim_token_expires": "2026-05-21T17:31:25.994Z",
   "post_claim_scopes": ["api.read", "api.write"]
@@ -197,7 +197,7 @@ Response (200):
   "credential": "sk_test_...",
   "credential_expires": null,
   "scopes": ["api.read"],
-  "claim_url": "https://auth.service.com/agent/auth/claim",
+  "claim_url": "https://auth.service.example.com/agent/auth/claim",
   "claim_token": "clm_...",
   "claim_token_expires": "2026-05-21T17:26:32.915Z",
   "post_claim_scopes": ["api.read", "api.write"]
@@ -293,7 +293,7 @@ Authorization: Bearer <credential>
 
 If you get a 401 on a previously-working credential: drop it, restart at [Step 1](#step-1--discover). Do not stash the credential and retry.
 
-Full API reference: `https://docs.service.com/`.
+Full API reference: `https://docs.service.example.com/`.
 
 ## Errors
 

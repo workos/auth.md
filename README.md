@@ -39,15 +39,15 @@ Hosted at `/.well-known/oauth-authorization-server`:
 
 ```json
 {
-  "resource": "https://api.service.com/",
-  "authorization_servers": ["https://auth.service.com/"],
+  "resource": "https://api.service.example.com/",
+  "authorization_servers": ["https://auth.service.example.com/"],
   "scopes_supported": ["api.read", "api.write"],
   "bearer_methods_supported": ["header"],
   "agent_auth": {
-    "skill": "https://service.com/auth.md",
-    "register_uri": "https://auth.service.com/agent/auth",
-    "claim_uri": "https://auth.service.com/agent/auth/claim",
-    "revocation_uri": "https://auth.service.com/agent/auth/revoke",
+    "skill": "https://service.example.com/auth.md",
+    "register_uri": "https://auth.service.example.com/agent/auth",
+    "claim_uri": "https://auth.service.example.com/agent/auth/claim",
+    "revocation_uri": "https://auth.service.example.com/agent/auth/revoke",
     "identity_types_supported": ["anonymous", "identity_assertion"],
     "anonymous": {
       "credential_types_supported": ["api_key"]

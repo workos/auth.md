@@ -111,10 +111,10 @@ PRM:
 
 ```json
 {
-  "resource": "https://api.service.com/",
+  "resource": "https://api.service.example.com/",
   "resource_name": "Service",
-  "resource_logo_uri": "https://service.com/logo.png",
-  "authorization_servers": ["https://auth.service.com/"],
+  "resource_logo_uri": "https://service.example.com/logo.png",
+  "authorization_servers": ["https://auth.service.example.com/"],
   "scopes_supported": ["api.read", "api.write"],
   "bearer_methods_supported": ["header"]
 }
@@ -124,15 +124,15 @@ AS metadata:
 
 ```json
 {
-  "resource": "https://api.service.com/",
-  "authorization_servers": ["https://auth.service.com/"],
+  "resource": "https://api.service.example.com/",
+  "authorization_servers": ["https://auth.service.example.com/"],
   "scopes_supported": ["api.read", "api.write"],
   "bearer_methods_supported": ["header"],
   "agent_auth": {
-    "skill": "https://service.com/auth.md",
-    "register_uri": "https://auth.service.com/agent/auth",
-    "claim_uri": "https://auth.service.com/agent/auth/claim",
-    "revocation_uri": "https://auth.service.com/agent/auth/revoke",
+    "skill": "https://service.example.com/auth.md",
+    "register_uri": "https://auth.service.example.com/agent/auth",
+    "claim_uri": "https://auth.service.example.com/agent/auth/claim",
+    "revocation_uri": "https://auth.service.example.com/agent/auth/revoke",
     "identity_types_supported": ["anonymous", "identity_assertion"],
     "anonymous": {
       "credential_types_supported": ["api_key"]
@@ -157,7 +157,7 @@ On any 401 from your API, include the discovery hint:
 
 ```
 HTTP/1.1 401 Unauthorized
-WWW-Authenticate: Bearer resource_metadata="https://api.service.com/.well-known/oauth-protected-resource"
+WWW-Authenticate: Bearer resource_metadata="https://api.service.example.com/.well-known/oauth-protected-resource"
 ```
 
 Consider also publishing an `auth.md` at your root — a short, LLM-readable summary of your agent auth posture that points back at the PRM, for agents that discover via documentation rather than 401 probing.
@@ -168,7 +168,7 @@ The endpoint dispatches on the `type` field. All requests scope to a single tena
 
 ```http
 POST /agent/auth HTTP/1.1
-Host: auth.service.com
+Host: auth.service.example.com
 Content-Type: application/json
 ```
 
@@ -441,15 +441,15 @@ Accept logout tokens at the `revocation_uri` advertised in your discovery docume
 
 ```
 POST /agent/auth/revoke HTTP/1.1
-Host: auth.service.com
+Host: auth.service.example.com
 Content-Type: application/logout+jwt
 
 { "typ": "logout+jwt", "alg", "kid" }
 .
 {
-  "iss": "https://api.agent-provider.com",
+  "iss": "https://api.agent-provider.example.com",
   "sub": "<opaque user identifier>",
-  "aud": "https://auth.service.com",
+  "aud": "https://auth.service.example.com",
   "jti": "<unique identifier>",
   "iat": <epoch seconds>,
   "events": {
