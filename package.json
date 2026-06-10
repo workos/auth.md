@@ -1,6 +1,6 @@
 {
   "name": "auth-md",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "scripts": {
     "dev": "pnpm --filter shared build && concurrently --names agent-provider,agent-service --prefix-colors blue,magenta \"pnpm --filter agent-providers dev\" \"pnpm --filter agent-services dev\"",

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sign in</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="page-login">
+<h1>Sign in</h1>
+<p>Mock identity provider. Any email works — unknown emails are auto-provisioned for the demo.</p>
+<% if (error) { %>
+  <p class="err"><%= error %></p>
+<% } %>
+<form method="POST" action="/login">
+  <input type="hidden" name="return_to" value="<%= returnTo %>">
+  <label>
+    Email
+    <input type="email" name="email" placeholder="you@example.com" required autofocus list="seeded-users">
+  </label>
+  <datalist id="seeded-users">
+    <% seededUsers.forEach(function(u) { %>
+      <option value="<%= u.email %>"><%= u.email %></option>
+    <% }) %>
+  </datalist>
+  <button type="submit">Continue</button>
+</form>
+<p class="seed">Seeded: <code>alice@service.example.com</code>, <code>bob@service.example.com</code></p>
+</body></html>

@@ -48,6 +48,9 @@ importers:
       cors:
         specifier: ^2.8.5
         version: 2.8.6
+      ejs:
+        specifier: ^6.0.1
+        version: 6.0.1
       express:
         specifier: ^4.21.2
         version: 4.22.1
@@ -67,6 +70,9 @@ importers:
       '@types/cors':
         specifier: ^2.8.17
         version: 2.8.19
+      '@types/ejs':
+        specifier: ^3.1.5
+        version: 3.1.5
       '@types/express':
         specifier: ^4.17.21
         version: 4.17.25
@@ -344,6 +350,10 @@ packages:
       '@types/node': 22.19.17
     dev: true
 
+  /@types/ejs@3.1.5:
+    resolution: {integrity: sha512-nv+GSx77ZtXiJzwKdsASqi+YQ5Z7vwHsTP0JY2SiQgjGckkBRKZnk8nIM+7oUZ1VCtuTz0+By4qVR7fqzp/Dfg==}
+    dev: true
+
   /@types/express-serve-static-core@4.19.8:
     resolution: {integrity: sha512-02S5fmqeoKzVZCHPZid4b8JH2eM5HzQLZWN2FohQEy/0eXTq8VXZfSN6Pcr3F6N9R/vNrj7cpgbhjie6m/1tCA==}
     dependencies:
@@ -578,6 +588,12 @@ packages:
 
   /ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
+    dev: false
+
+  /ejs@6.0.1:
+    resolution: {integrity: sha512-UaaM14yby8U3k02ihS1Bmj5Kz2d7CCQM1scxpgs4Mhkq8F1wR2gl3+Ts4h5Ne4Mnt7M9m4Dw7jsuMr3+xO4vZA==}
+    engines: {node: '>=0.12.18'}
+    hasBin: true
     dev: false
 
   /emoji-regex@8.0.0:

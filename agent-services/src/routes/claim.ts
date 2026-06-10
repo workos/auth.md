@@ -3,6 +3,7 @@ import { Router } from "express";
 import { config } from "../config.js";
 import { claimFormBody, parseBody } from "../schemas.js";
 import {
+  type LoginHint,
   type Registration,
   type User,
   completeClaim,
@@ -26,6 +27,8 @@ import { trustedIssuerDisplayName } from "../trust.js";
 
 export const claimRouter = Router();
 
+const completeUrl = `${config.claimEndpointPath}/complete`;
+
 claimRouter.get("/claim", (req, res) => {
   const token =
     typeof req.query.claim_attempt_token === "string"
@@ -36,61 +39,90 @@ claimRouter.get("/claim", (req, res) => {
 
   const registration = lookupRegistration(token);
   if (!registration) {
-    res
-      .status(404)
-      .type("html")
-      .send(
-        renderClaimPage({
-          status: "error",
-          title: "Link invalid",
-          message:
-            "This claim link is no longer valid — it may have been superseded, used, or expired. Ask the agent to start a new claim.",
-        }),
-      );
-    return;
+    return renderMessage(res, 404, "error", "Link invalid", invalidLinkCopy);
   }
   if (registration.status === "claimed") {
-    res
-      .status(200)
-      .type("html")
-      .send(
-        renderClaimPage({
-          status: "done",
-          title: "Already claimed",
-          message:
-            "This registration has already been claimed. You can close this tab.",
-        }),
-      );
-    return;
+    return renderMessage(res, 200, "done", "Already claimed", alreadyClaimedCopy);
   }
   const attempt = registration.claim?.attempt;
   if (!attempt || attempt.view_expires_at.getTime() < Date.now()) {
-    res
-      .status(410)
-      .type("html")
-      .send(
-        renderClaimPage({
-          status: "error",
-          title: "Link expired",
-          message:
-            "This claim link has expired. Ask the agent to start a new claim.",
-        }),
-      );
-    return;
+    return renderMessage(res, 410, "error", "Link expired", expiredLinkCopy);
   }
   if (hintMismatch(attempt.login_hint, user)) {
-    res.status(403).type("html").send(renderWrongAccount(attempt.login_hint!));
+    return renderWrongAccount(res, attempt.login_hint!, user);
+  }
+
+  res.render("claim", {
+    variant: "form",
+    title: titleFor(registration),
+    provider: providerFor(registration),
+    userEmail: user.email,
+    completeUrl,
+    claimAttemptToken: token,
+    formError: null,
+    advisories: computeAdvisories(registration, user).map(renderAdvisory),
+  });
+});
+
+/*
+ * Form-action endpoint. Same path the agent used to call in the old flow,
+ * but the body and auth context are different: cookie-gated, with the user
+ * supplying the user_code they got from the agent.
+ */
+claimRouter.post(completeUrl, (req, res) => {
+  const parsed = parseBody(claimFormBody, req.body);
+  if (!parsed.ok) {
+    return renderMessage(res, 400, "error", "Invalid submission", parsed.message);
+  }
+
+  const user = requireUser(
+    req,
+    res,
+    returnToFor(parsed.value.claim_attempt_token),
+  );
+  if (!user) return;
+
+  const registration = lookupRegistration(parsed.value.claim_attempt_token);
+  if (!registration) {
+    return renderMessage(
+      res,
+      404,
+      "error",
+      "Link invalid",
+      "This claim link is no longer valid. Ask the agent to start a new claim.",
+    );
+  }
+
+  const hint = registration.claim?.attempt?.login_hint;
+  if (hintMismatch(hint, user)) {
+    return renderWrongAccount(res, hint!, user);
+  }
+
+  const result = completeClaim(registration, parsed.value.user_code, user);
+  if (!result.ok) {
+    res.status(statusForError(result.error)).render("claim", {
+      variant: "form-error",
+      title: titleFor(registration),
+      provider: providerFor(registration),
+      userEmail: user.email,
+      completeUrl,
+      claimAttemptToken: parsed.value.claim_attempt_token,
+      formError: humanError(result.error),
+      advisories: computeAdvisories(registration, user).map(renderAdvisory),
+    });
     return;
   }
 
-  res.type("html").send(
-    renderClaimPage({
-      status: "form",
-      title: "Authorize this agent?",
-      message: `You're signed in as <code>${escapeHtml(user.email)}</code>. The agent should have shown you a 6-digit code — enter it below to authorize it to act on your behalf.`,
-      advisories: computeAdvisories(registration, user),
-      claimAttemptToken: token,
-    }),
+  console.log(
+    `[claim] registration=${result.registration.id} claimed by user=${user.id}`,
+  );
+
+  renderMessage(
+    res,
+    200,
+    "done",
+    "All set",
+    "The agent has been authorized to act on your behalf. You can close this tab — the agent will pick up automatically.",
   );
 });
 
@@ -158,7 +190,7 @@ function renderAdvisory(a: Advisory): string {
 }
 
 function hintMismatch(
-  hint: { kind: "email"; value: string } | undefined,
+  hint: LoginHint | undefined,
   user: User,
 ): boolean {
   return (
@@ -167,98 +199,49 @@ function hintMismatch(
   );
 }
 
-function renderWrongAccount(hint: { kind: "email"; value: string }): string {
-  return renderClaimPage({
-    status: "error",
+function renderMessage(
+  res: Response,
+  status: number,
+  variant: "done" | "error",
+  title: string,
+  message: string,
+): void {
+  res.status(status).render("claim", { variant, title, message });
+}
+
+function renderWrongAccount(
+  res: Response,
+  hint: LoginHint,
+  user: User,
+): void {
+  res.status(403).render("claim", {
+    variant: "wrong-account",
     title: "Wrong account",
-    message: `This claim was started for <code>${escapeHtml(hint.value)}</code>. Sign out and sign back in as that account to authorize the agent.`,
+    claimEmail: hint.value,
+    userEmail: user.email,
   });
 }
 
-/*
- * Form-action endpoint. Same path the agent used to call in the old flow,
- * but the body and auth context are different: cookie-gated, with the user
- * supplying the user_code they got from the agent.
+/**
+ * Title for the claim form. ID-JAG step-up registrations name the provider
+ * being linked ("Link Cursor to your account?"); anonymous and service_auth
+ * use generic copy. Provider name comes from the service's trust list (in
+ * production this would typically resolve via CIMD with the service still
+ * gating which client_name values it renders).
  */
-claimRouter.post(`${config.claimEndpointPath}/complete`, (req, res) => {
-  const parsed = parseBody(claimFormBody, req.body);
-  if (!parsed.ok) {
-    res
-      .status(400)
-      .type("html")
-      .send(
-        renderClaimPage({
-          status: "error",
-          title: "Invalid submission",
-          message: parsed.message,
-        }),
-      );
-    return;
+function titleFor(registration: Registration): string {
+  const provider = providerFor(registration);
+  return provider
+    ? `Link ${provider} to your account?`
+    : "Authorize this agent?";
+}
+
+function providerFor(registration: Registration): string | null {
+  if (registration.kind === "id_jag" && registration.id_jag) {
+    return trustedIssuerDisplayName(registration.id_jag.iss);
   }
-
-  const user = requireUser(
-    req,
-    res,
-    returnToFor(parsed.value.claim_attempt_token),
-  );
-  if (!user) return;
-
-  const registration = lookupRegistration(parsed.value.claim_attempt_token);
-  if (!registration) {
-    res
-      .status(404)
-      .type("html")
-      .send(
-        renderClaimPage({
-          status: "error",
-          title: "Link invalid",
-          message:
-            "This claim link is no longer valid. Ask the agent to start a new claim.",
-        }),
-      );
-    return;
-  }
-
-  const hint = registration.claim?.attempt?.login_hint;
-  if (hintMismatch(hint, user)) {
-    res.status(403).type("html").send(renderWrongAccount(hint!));
-    return;
-  }
-
-  const result = completeClaim(registration, parsed.value.user_code, user);
-  if (!result.ok) {
-    res
-      .status(statusForError(result.error))
-      .type("html")
-      .send(
-        renderClaimPage({
-          status: "form-error",
-          title: "Authorize this agent?",
-          message: `You're signed in as <code>${escapeHtml(user.email)}</code>. The agent should have shown you a 6-digit code — enter it below to authorize it to act on your behalf.`,
-          advisories: computeAdvisories(registration, user),
-          claimAttemptToken: parsed.value.claim_attempt_token,
-          error: humanError(result.error),
-        }),
-      );
-    return;
-  }
-
-  console.log(
-    `[claim] registration=${result.registration.id} claimed by user=${user.id}`,
-  );
-
-  res
-    .status(200)
-    .type("html")
-    .send(
-      renderClaimPage({
-        status: "done",
-        title: "All set",
-        message:
-          "The agent has been authorized to act on your behalf. You can close this tab — the agent will pick up automatically.",
-      }),
-    );
-});
+  return null;
+}
 
 function requireUser(
   req: Request,
@@ -311,88 +294,6 @@ function humanError(error: string): string {
   }
 }
 
-function renderClaimPage(input: {
-  status: "form" | "form-error" | "done" | "error";
-  title: string;
-  message: string;
-  advisories?: Advisory[];
-  claimAttemptToken?: string;
-  error?: string;
-}): string {
-  const isError = input.status === "error";
-  const headingColor = isError ? "var(--error)" : "var(--brand-primary)";
-
-  const advisoryBlock = (input.advisories ?? [])
-    .map((a) => `<div class="advisory">${renderAdvisory(a)}</div>`)
-    .join("\n");
-
-  const formBlock =
-    input.status === "form" || input.status === "form-error"
-      ? `
-<form method="POST" action="${config.claimEndpointPath}/complete">
-  <input type="hidden" name="claim_attempt_token" value="${escapeAttr(input.claimAttemptToken ?? "")}">
-  <label>
-    6-digit code
-    <input
-      type="text"
-      name="user_code"
-      inputmode="numeric"
-      pattern="[0-9]{6}"
-      maxlength="6"
-      autocomplete="one-time-code"
-      placeholder="000000"
-      required
-      autofocus
-    >
-  </label>
-  ${input.error ? `<p class="err">${escapeHtml(input.error)}</p>` : ""}
-  <button type="submit">Authorize agent</button>
-</form>
-<p class="warn">Only enter a code from an agent you trust. Pasting a code from an untrusted source could let that agent act on your behalf.</p>
-`
-      : "";
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>${escapeHtml(input.title)}</title>
-<style>
-  :root {
-    --brand-primary: #6D6DF2;
-    --brand-text: #030527;
-    --brand-bg: #FFFFFF;
-    --error: #e55039;
-    --muted: rgba(3, 5, 39, .65);
-    --border: rgba(3, 5, 39, .12);
-    --surface-soft: rgba(3, 5, 39, .04);
-    --warn-bg: rgba(245, 158, 11, .08);
-    --warn-border: rgba(245, 158, 11, .35);
-    --warn-text: #8a5a00;
-  }
-  body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1.5rem; line-height: 1.5; color: var(--brand-text); background: var(--brand-bg); }
-  h1 { color: ${headingColor}; }
-  p { color: var(--muted); }
-  code { background: var(--surface-soft); padding: .05rem .3rem; border-radius: .2rem; font-size: .9em; }
-  form { margin-top: 1.5rem; display: flex; flex-direction: column; gap: .75rem; }
-  label { font-size: .85rem; font-weight: 600; color: var(--brand-text); }
-  input { width: 100%; padding: .65rem .75rem; border: 1px solid var(--border); border-radius: .35rem; font-size: 1.4rem; letter-spacing: .35rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: center; background: var(--brand-bg); color: var(--brand-text); }
-  button { padding: .7rem 1rem; background: var(--brand-primary); color: white; border: none; border-radius: .35rem; font-weight: 600; font-size: 1rem; cursor: pointer; }
-  button:hover { filter: brightness(1.08); }
-  .err { color: var(--error); background: rgba(229, 80, 57, .08); border: 1px solid rgba(229, 80, 57, .35); padding: .5rem .75rem; border-radius: .35rem; font-size: .85rem; margin: 0; }
-  .warn { background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); padding: .6rem .8rem; border-radius: .35rem; font-size: .8rem; margin-top: 1rem; }
-  .advisory { background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); padding: .65rem .8rem; border-radius: .35rem; font-size: .85rem; margin: .5rem 0; }
-  .advisory + .advisory { margin-top: .4rem; }
-</style>
-</head>
-<body>
-<h1>${escapeHtml(input.title)}</h1>
-<p>${input.message}</p>
-${advisoryBlock}
-${formBlock}
-</body></html>`;
-}
-
 function escapeHtml(s: string): string {
   return s.replace(
     /[&<>"']/g,
@@ -403,6 +304,9 @@ function escapeHtml(s: string): string {
   );
 }
 
-function escapeAttr(s: string): string {
-  return escapeHtml(s);
-}
+const invalidLinkCopy =
+  "This claim link is no longer valid — it may have been superseded, used, or expired. Ask the agent to start a new claim.";
+const alreadyClaimedCopy =
+  "This registration has already been claimed. You can close this tab.";
+const expiredLinkCopy =
+  "This claim link has expired. Ask the agent to start a new claim.";
