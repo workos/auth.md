@@ -466,6 +466,17 @@ export function findOrCreateIdJagRegistration(input: {
     if (existing) {
       existing.user_id = input.context.user.id;
       if (!existing.claimed_at) existing.claimed_at = now;
+      /*
+       * A prior provider SET may have revoked this binding. Reaching a
+       * clean match again means the delegation was legitimately
+       * re-established — matchOrProvision only returns a `user` context
+       * from a live delegation or JIT-provisioning, and getting here at
+       * all requires a fresh, non-replayable ID-JAG (verifyIdJag enforces
+       * jti-replay and auth_time freshness). Revive the registration so it
+       * isn't left in a revoked-but-"ready" limbo where the identity
+       * endpoint would sign an assertion for an "expired" registration.
+       */
+      existing.revoked_at = undefined;
       return { kind: "ready", registration: existing };
     }
     const registration = new Registration({

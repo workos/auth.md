@@ -395,7 +395,7 @@ agentAuthRouter.post(
         verified.claims.aud,
       );
       console.log(
-        `[agent-auth] revoked ${revoked.credentials} credentials and ${revoked.registrations} registration(s) for iss=${verified.claims.iss} sub=${verified.claims.sub}`,
+        `[agent-auth] revoked ${revoked.credentials} credentials and ${revoked.registrations} registration(s) for iss=${verified.claims.iss} sub=${verified.claims.sub} aud=${verified.claims.aud}`,
       );
     } else {
       console.log(
