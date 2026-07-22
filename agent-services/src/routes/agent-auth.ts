@@ -303,16 +303,28 @@ agentAuthRouter.post(config.claimEndpointPath, async (req, res) => {
    * NOT be able to re-point the ceremony at a different account, so the
    * bound hint is preserved and the caller-supplied email is ignored.
    */
-  const boundHint = registration.claim?.attempt?.login_hint;
-  const hint: LoginHint =
-    registration.kind === "id_jag" && boundHint
-      ? boundHint
-      : { kind: "email", value: parsed.value.email };
+  let hint: LoginHint;
+  if (registration.kind === "id_jag") {
+    // A step-up registration must always carry the matcher-bound hint. If it is
+    // ever missing, fail closed rather than fall back to the caller-supplied
+    // email, which would re-open the account-linking bypass this guards against.
+    const boundHint = registration.claim?.attempt?.login_hint;
+    if (!boundHint) {
+      res.status(500).json({
+        error: "server_error",
+        message: "Claim ceremony is missing its bound identity.",
+      });
+      return;
+    }
+    hint = boundHint;
+  } else {
+    hint = { kind: "email", value: parsed.value.email };
+  }
   const fresh = recordClaimAttempt(registration, hint);
   const attempt = registration.claim!.attempt!;
 
   console.log(
-    `[agent-auth] claim initiated for registration=${registration.id} to=${parsed.value.email}`,
+    `[agent-auth] claim initiated for registration=${registration.id} to=${hint.value}`,
   );
 
   res.json({
