@@ -101,6 +101,7 @@ export class Registration {
   user_id?: string;
   created_at: Date;
   claimed_at?: Date;
+  revoked_at?: Date;
   claim?: RegistrationClaim;
   id_jag?: RegistrationIdJag;
 
@@ -110,6 +111,7 @@ export class Registration {
     created_at: Date;
     user_id?: string;
     claimed_at?: Date;
+    revoked_at?: Date;
     claim?: RegistrationClaim;
     id_jag?: RegistrationIdJag;
   }) {
@@ -118,6 +120,7 @@ export class Registration {
     this.user_id = init.user_id;
     this.created_at = init.created_at;
     this.claimed_at = init.claimed_at;
+    this.revoked_at = init.revoked_at;
     this.claim = init.claim;
     this.id_jag = init.id_jag;
   }
@@ -127,6 +130,12 @@ export class Registration {
    * column to keep in sync, no sweeper job needed to mark things expired.
    */
   get status(): "unclaimed" | "pending_claim" | "claimed" | "expired" {
+    /*
+     * A provider-pushed revocation (SET) severs the delegation this
+     * registration anchors. Check it before `claimed_at` so a claimed
+     * registration can't keep re-minting credentials after revocation.
+     */
+    if (this.revoked_at) return "expired";
     if (this.claimed_at) return "claimed";
     if (this.claim && this.claim.expires_at.getTime() < Date.now()) {
       return "expired";
@@ -259,19 +268,49 @@ export function findCredential(token: string): Credential | undefined {
   return c;
 }
 
+/**
+ * Provider-pushed revocation (RFC 8935 SET). Severs everything anchored to
+ * the `(iss, sub, aud)` delegation, not just the currently-outstanding
+ * access tokens: it revokes the credential rows, tears down the registration
+ * (marking it revoked and dropping its claim handle so neither the claim
+ * grant nor the jwt-bearer grant can re-mint), and deletes the delegation
+ * record. This upholds the documented contract in `AUTH.md` — the identity
+ * assertion, the registration, and every derived access token are all
+ * invalidated.
+ */
 export function revokeForDelegation(
   iss: string,
   sub: string,
   aud: string,
-): number {
-  let count = 0;
+): { credentials: number; registrations: number } {
+  let credentialCount = 0;
   for (const c of credentials.values()) {
     if (!c.revoked && c.iss === iss && c.sub === sub && c.aud === aud) {
       c.revoked = true;
-      count += 1;
+      credentialCount += 1;
     }
   }
-  return count;
+
+  const now = new Date();
+  let registrationCount = 0;
+  for (const r of registrations.values()) {
+    if (
+      r.id_jag &&
+      r.id_jag.iss === iss &&
+      r.id_jag.sub === sub &&
+      r.id_jag.aud === aud &&
+      !r.revoked_at
+    ) {
+      r.revoked_at = now;
+      /* Drop the claim handle so the surviving claim_token stops resolving. */
+      r.claim = undefined;
+      registrationCount += 1;
+    }
+  }
+
+  delegations.delete(delegationKey(iss, sub));
+
+  return { credentials: credentialCount, registrations: registrationCount };
 }
 
 export function revokeCredential(token: string): boolean {
@@ -332,7 +371,9 @@ export function createAnonymousRegistration(): {
  * and surfaces both to the user. The user signs in to the service, types the
  * code on the claim page, and ownership transfers.
  */
-export function createServiceAuthRegistration(input: { login_hint: LoginHint }): {
+export function createServiceAuthRegistration(input: {
+  login_hint: LoginHint;
+}): {
   registration: Registration;
   claimTokenPlaintext: string;
   claimViewTokenPlaintext: string;

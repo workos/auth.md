@@ -389,13 +389,13 @@ agentAuthRouter.post(
      */
     const schemas = Object.keys(verified.claims.events);
     if (schemas.includes(IDENTITY_ASSERTION_REVOKED_SCHEMA)) {
-      const count = revokeForDelegation(
+      const revoked = revokeForDelegation(
         verified.claims.iss,
         verified.claims.sub,
         verified.claims.aud,
       );
       console.log(
-        `[agent-auth] revoked ${count} credentials for iss=${verified.claims.iss} sub=${verified.claims.sub}`,
+        `[agent-auth] revoked ${revoked.credentials} credentials and ${revoked.registrations} registration(s) for iss=${verified.claims.iss} sub=${verified.claims.sub}`,
       );
     } else {
       console.log(
