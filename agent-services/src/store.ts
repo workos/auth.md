@@ -525,6 +525,19 @@ export function findOrCreateIdJagRegistration(input: {
      * Pending step-up exists — re-issue ceremony. Prior URL/code stop
      * working; the agent surfaces the new ones to the user.
      */
+    if (existing.revoked_at) {
+      /*
+       * The binding was revoked by a provider SET, but a fresh,
+       * non-replayed ID-JAG (verifyIdJag enforces jti-replay and
+       * auth_time freshness) plus this confirmation ceremony is a
+       * legitimate re-authorization. Clear the revocation and the stale
+       * claimed_at so the registration drops back to a pending_claim
+       * state — it only becomes "claimed" again once the user completes
+       * the new ceremony, so no credential is issued before then.
+       */
+      existing.revoked_at = undefined;
+      existing.claimed_at = undefined;
+    }
     existing.claim = claim;
     return {
       kind: "step_up",
