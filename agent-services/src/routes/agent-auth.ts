@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { matchOrProvision } from "../matcher.js";
 import { agentAuthBody, claimBody, parseBody } from "../schemas.js";
 import {
+  type LoginHint,
   type Registration,
   classifyLoginHint,
   createAnonymousRegistration,
@@ -294,11 +295,20 @@ agentAuthRouter.post(config.claimEndpointPath, async (req, res) => {
    * login_hint is per-attempt — a re-initiation may supply a corrected
    * email; only the current attempt's view_token and user_code work, and
    * the /claim page surfaces the current attempt's hint as an advisory.
+   *
+   * id_jag step-up registrations are the exception: their login_hint is set
+   * by the matcher to the account the ID-JAG's verified email resolved to,
+   * and it is the sole control gating who may complete the step-up. A
+   * re-mint here (only ever needed to refresh an expired user_code) must
+   * NOT be able to re-point the ceremony at a different account, so the
+   * bound hint is preserved and the caller-supplied email is ignored.
    */
-  const fresh = recordClaimAttempt(registration, {
-    kind: "email",
-    value: parsed.value.email,
-  });
+  const boundHint = registration.claim?.attempt?.login_hint;
+  const hint: LoginHint =
+    registration.kind === "id_jag" && boundHint
+      ? boundHint
+      : { kind: "email", value: parsed.value.email };
+  const fresh = recordClaimAttempt(registration, hint);
   const attempt = registration.claim!.attempt!;
 
   console.log(
