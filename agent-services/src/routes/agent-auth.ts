@@ -255,11 +255,14 @@ async function handleServiceAuth(
 }
 
 /*
- * Initiates or re-mints a claim ceremony. Two registration kinds reach here:
+ * Initiates or re-mints a claim ceremony. Three registration kinds reach here:
  *   - anonymous: first initiation (binds the email) or refresh (after the
  *     user_code window closed before the user could complete).
  *   - service_auth: refresh only (the initial ceremony was minted at
  *     /agent/identity); the supplied email must match the registration.
+ *   - id_jag: refresh only (the step-up ceremony was minted at
+ *     /agent/identity); the matcher-bound login_hint is authoritative and the
+ *     caller-supplied email is ignored (see the hint handling below).
  */
 agentAuthRouter.post(config.claimEndpointPath, async (req, res) => {
   const parsed = parseBody(claimBody, req.body);
