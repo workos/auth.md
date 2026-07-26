@@ -534,9 +534,17 @@ export function findOrCreateIdJagRegistration(input: {
        * claimed_at so the registration drops back to a pending_claim
        * state — it only becomes "claimed" again once the user completes
        * the new ceremony, so no credential is issued before then.
+       *
+       * Clear the stale user binding too: a provider SET severed the
+       * delegation, so the pre-revocation user_id must not survive into the
+       * revived pending_claim registration. Leaving it intact would let a
+       * pre-revocation identity_assertion mint victim-bound tokens at
+       * jwt-bearer before the user re-confirms. The binding is
+       * re-established only when the new ceremony completes.
        */
       existing.revoked_at = undefined;
       existing.claimed_at = undefined;
+      existing.user_id = undefined;
     }
     existing.claim = claim;
     return {

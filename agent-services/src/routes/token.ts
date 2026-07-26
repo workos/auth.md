@@ -133,6 +133,23 @@ async function handleJwtBearerGrant(
     );
     return;
   }
+  /*
+   * Identity-bound (non-anonymous) registrations only mint tokens once the
+   * user has confirmed ownership (status: claimed). A `pending_claim` or
+   * `unclaimed` id_jag/service_auth registration predates confirmation —
+   * e.g. a revoked binding revived by a step-up ceremony that the user has
+   * not yet re-approved — so a surviving pre-revocation identity_assertion
+   * must not exchange for a credential here. Anonymous registrations
+   * legitimately exchange pre-claim (capped to preClaimScopes below).
+   */
+  if (registration.kind !== "anonymous" && registration.status !== "claimed") {
+    oauthError(
+      res,
+      "invalid_grant",
+      `The registration is not claimed. Complete the confirmation ceremony at ${config.claimEndpointPath}.`,
+    );
+    return;
+  }
 
   const credential = issueAccessTokenForRegistration(registration);
   console.log(
