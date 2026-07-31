@@ -262,15 +262,21 @@ The end goal: get a signed-in user to confirm a 6-digit `user_code` **you supply
 
 For **service_auth** registrations, you already have them — they're in the `claim` block of the Step 3 response. Skip to 4b.
 
-For **anonymous** registrations, ask the service to start a ceremony:
+For **anonymous** registrations, you have two options:
+
+- **login_hint shape (`type: "login_hint"`)** — start a user_code ceremony for the user identified by the login_hint. Default path; works when the agent has no provider identity.
+- **ID-JAG shape (`type: "identity_assertion"`)** — if you later acquire an ID-JAG, you can finish the claim straight away and skip the user_code ceremony. See [4a-alt](#4a-alt-claim-via-id-jag) below.
+
+login_hint shape:
 
 ```http
 POST /agent/identity/claim
 Content-Type: application/json
 
 {
+  "type": "login_hint",
   "claim_token": "clm_...",
-  "email": "user@example.com"
+  "login_hint": "user@example.com"
 }
 ```
 
@@ -292,6 +298,60 @@ Response (200):
 ```
 
 The `claim_attempt` block here — same shape as the `claim` block in the `service_auth` registration response — borrows from [RFC 8628 device-authorization](https://datatracker.ietf.org/doc/html/rfc8628), with `claim_attempt_token` embedded in `verification_uri` so the URL identifies the registration without leaking the user-typed `user_code`. Surface `verification_uri` + `user_code` to the user; poll the standard `token_endpoint` from AS metadata with the claim grant (see 4c).
+
+### 4a-alt. Claim via ID-JAG
+
+If you started anonymous, the user wants to claim the registration, and you can obtain an ID-JAG for them, you can bind the existing registration to that identity instead of re-registering:
+
+```http
+POST /agent/identity/claim
+Content-Type: application/json
+
+{
+  "type": "identity_assertion",
+  "claim_token": "clm_...",
+  "assertion": "<your ID-JAG JWT>"
+}
+```
+
+Two success shapes:
+
+**No confirmation needed (200)** — the ID-JAG is enough on its own, either because there's already an `(iss, sub)` delegation for this user or because the ID-JAG's email doesn't conflict with another account at the service. The registration is bound right away:
+
+```json
+{
+  "registration_id": "reg_...",
+  "registration_type": "identity_assertion",
+  "status": "claimed",
+  "identity_assertion": "<service-signed JWT>",
+  "assertion_expires": "2026-05-21T18:31:25.994Z"
+}
+```
+
+Skip to [Step 5](#step-5--exchange-the-assertion) with the new `identity_assertion`.
+
+**Confirmation required (200)** — the ID-JAG's verified email matches an existing different account at the service and no `(iss, sub)` delegation exists yet. The service won't silently bind the delegation; surface the returned `claim_attempt` block to the user and poll `/oauth2/token` exactly as in the user-code claim flow ([Step 4b](#4b-hand-off-to-the-user) and [Step 4c](#4c-poll-for-completion)). The user signs in, confirms linking the provider identity to their account, and the next poll resolves to a post-claim access_token plus a v2 `identity_assertion`:
+
+```json
+{
+  "registration_id": "reg_...",
+  "registration_type": "identity_assertion",
+  "claim_attempt_id": "cla_...",
+  "status": "initiated",
+  "expires_at": "...",
+  "claim_attempt": {
+    "user_code": "123456",
+    "verification_uri": "https://auth.service.example.com/claim?claim_attempt_token=...",
+    "expires_in": 600,
+    "interval": 5
+  }
+}
+```
+
+Failures:
+
+- **`login_required` (401)** — the ID-JAG's `auth_time` is missing or stale. Re-authenticate at your provider and retry.
+- **`invalid_grant`** / other ID-JAG verification errors (400) — fix the ID-JAG (fresh `jti`, correct `aud`, etc.) and retry.
 
 The `email` you supply on anonymous `/claim` binds the registration to the human you intend the agent to act on behalf of — only that signed-in user can complete the ceremony. Without this, a third party who intercepted the `user_code` could claim the agent for themselves.
 

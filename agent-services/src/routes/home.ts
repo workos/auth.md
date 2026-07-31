@@ -341,6 +341,7 @@ function updateAnonExchangePreview() {
 }
 function updateAnonClaimPreview() {
   const body = {
+    type: "email",
     claim_token: abbrev(state.anon_claim_token),
     email: document.getElementById("anon-claim-email").value,
   };
@@ -472,8 +473,9 @@ async function anonCallPre() {
 
 async function anonClaim() {
   const body = {
+    type: "login_hint",
     claim_token: state.anon_claim_token,
-    email: document.getElementById("anon-claim-email").value,
+    login_hint: document.getElementById("anon-claim-email").value,
   };
   const r = await jsonFetch("/agent/identity/claim", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("anon-claim-out").innerHTML = resBlock(r.status, null, r.body, r.ok);

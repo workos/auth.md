@@ -5,6 +5,7 @@ import { agentAuthBody, claimBody, parseBody } from "../schemas.js";
 import {
   type Registration,
   classifyLoginHint,
+  completeAnonymousClaimViaIdJag,
   createAnonymousRegistration,
   createServiceAuthRegistration,
   findOrCreateIdJagRegistration,
@@ -253,13 +254,6 @@ async function handleServiceAuth(
   });
 }
 
-/*
- * Initiates or re-mints a claim ceremony. Two registration kinds reach here:
- *   - anonymous: first initiation (binds the email) or refresh (after the
- *     user_code window closed before the user could complete).
- *   - service_auth: refresh only (the initial ceremony was minted at
- *     /agent/identity); the supplied email must match the registration.
- */
 agentAuthRouter.post(config.claimEndpointPath, async (req, res) => {
   const parsed = parseBody(claimBody, req.body);
   if (!parsed.ok) {
@@ -289,20 +283,43 @@ agentAuthRouter.post(config.claimEndpointPath, async (req, res) => {
     });
     return;
   }
+  if (parsed.value.type === "identity_assertion") {
+    /* Only anonymous registrations claim atomically via ID-JAG. */
+    if (registration.kind !== "anonymous") {
+      res.status(409).json({
+        error: "claimed_or_in_flight",
+        message:
+          "ID-JAG claim is only supported for anonymous registrations. Use the login_hint-shape body to refresh the ceremony.",
+      });
+      return;
+    }
+    return handleAnonymousClaimViaIdJag(
+      registration,
+      parsed.value.assertion,
+      res,
+    );
+  }
+
   /*
    * Mint a fresh ceremony (new claim_attempt_token + new user_code). The
    * login_hint is per-attempt — a re-initiation may supply a corrected
    * email; only the current attempt's view_token and user_code work, and
    * the /claim page surfaces the current attempt's hint as an advisory.
    */
-  const fresh = recordClaimAttempt(registration, {
-    kind: "email",
-    value: parsed.value.email,
-  });
+  const login_hint = classifyLoginHint(parsed.value.login_hint);
+  if (!login_hint) {
+    res.status(400).json({
+      error: "invalid_login_hint",
+      message: "login_hint does not match a recognizable identifier shape.",
+    });
+    return;
+  }
+
+  const fresh = recordClaimAttempt(registration, login_hint);
   const attempt = registration.claim!.attempt!;
 
   console.log(
-    `[agent-auth] claim initiated for registration=${registration.id} to=${parsed.value.email}`,
+    `[agent-auth] claim initiated for registration=${registration.id} to=${parsed.value.login_hint}`,
   );
 
   res.json({
@@ -317,6 +334,92 @@ agentAuthRouter.post(config.claimEndpointPath, async (req, res) => {
     }),
   });
 });
+
+/*
+ * Verifies the ID-JAG and finishes the claim straight away if it can.
+ * If the ID-JAG isn't enough on its own, falls back to a user_code
+ * ceremony so the user can confirm. Response shapes are in AUTH.md.
+ */
+async function handleAnonymousClaimViaIdJag(
+  registration: Registration,
+  assertion: string,
+  res: express.Response,
+): Promise<void> {
+  const verified = await verifyIdJag(assertion);
+  if (!verified.ok) {
+    return handleIdJagVerifyError(verified.error, res);
+  }
+  const { claims } = verified;
+  const match = matchOrProvision(claims);
+
+  if (match.kind === "step_up_required") {
+    /*
+     * Bind the ID-JAG triple onto the registration alongside the
+     * ceremony so completeClaim upserts the (iss, sub) delegation when
+     * the user confirms.
+     */
+    const fresh = recordClaimAttempt(
+      registration,
+      { kind: "email", value: match.matched_user.email },
+      { iss: claims.iss, sub: claims.sub, aud: claims.aud },
+    );
+    const attempt = registration.claim!.attempt!;
+    console.log(
+      `[agent-auth] anon claim via ID-JAG requires step-up: registration=${registration.id} iss=${claims.iss} sub=${claims.sub}`,
+    );
+    res.json({
+      registration_id: registration.id,
+      registration_type: "identity_assertion",
+      claim_attempt_id: attempt.id,
+      status: "initiated",
+      expires_at: attempt.view_expires_at.toISOString(),
+      claim_attempt: buildCeremonyBlock({
+        claimViewTokenPlaintext: fresh.claimViewTokenPlaintext,
+        userCode: fresh.userCode,
+        userCodeExpiresAt: fresh.userCodeExpiresAt,
+      }),
+    });
+    return;
+  }
+
+  const result = completeAnonymousClaimViaIdJag(
+    registration,
+    { iss: claims.iss, sub: claims.sub, aud: claims.aud },
+    match.user,
+  );
+  if (!result.ok) {
+    /*
+     * Defensive: the route-level checks above already rule these out, but
+     * surface store-level errors with the right HTTP shape if reached.
+     */
+    const status =
+      result.error === "previously_claimed" ||
+      result.error === "ceremony_in_flight"
+        ? 409
+        : result.error === "claim_expired"
+          ? 410
+          : 400;
+    res.status(status).json({ error: result.error });
+    return;
+  }
+
+  const { jwt, expiresAt } = await signServiceIdJag({
+    registration: result.registration,
+    email: claims.email,
+    emailVerified: claims.email_verified,
+    amr: claims.amr,
+  });
+  console.log(
+    `[agent-auth] anonymous registration=${result.registration.id} claimed via ID-JAG for user=${result.user.id} iss=${claims.iss} sub=${claims.sub}`,
+  );
+  res.json({
+    registration_id: result.registration.id,
+    registration_type: "identity_assertion",
+    status: "claimed",
+    identity_assertion: jwt,
+    assertion_expires: expiresAt.toISOString(),
+  });
+}
 
 /*
  * Polling moved to /oauth2/token with grant_type=urn:workos:agent-auth:

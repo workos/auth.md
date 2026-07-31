@@ -23,10 +23,23 @@ export const agentAuthBody = z.union([
   anonymousBody,
 ]);
 
-export const claimBody = z.object({
+/* POST /agent/identity/claim — discriminated on `type`. */
+const loginHintClaimBody = z.object({
+  type: z.literal("login_hint"),
   claim_token: z.string().min(1),
-  email: z.email(),
+  login_hint: z.string().min(1),
 });
+
+const idJagClaimBody = z.object({
+  type: z.literal("identity_assertion"),
+  claim_token: z.string().min(1),
+  assertion: z.string().min(1),
+});
+
+export const claimBody = z.discriminatedUnion("type", [
+  loginHintClaimBody,
+  idJagClaimBody,
+]);
 
 /** Mock IdP sign-in form. */
 export const loginFormBody = z.object({

@@ -592,6 +592,8 @@ export function findRegistrationByClaimViewHash(
 export function recordClaimAttempt(
   registration: Registration,
   login_hint: LoginHint,
+  /* When set, completeClaim upserts the (iss, sub) → user delegation. */
+  idJag?: { iss: string; sub: string; aud: string },
 ): {
   claimViewTokenPlaintext: string;
   userCode: string;
@@ -614,6 +616,7 @@ export function recordClaimAttempt(
     user_code_expires_at: code.expiresAt,
     login_hint,
   };
+  if (idJag) registration.id_jag = idJag;
   return {
     claimViewTokenPlaintext: plaintext,
     userCode: code.plaintext,
@@ -699,11 +702,10 @@ export function completeClaim(
     }
   }
 
-  if (registration.kind === "id_jag" && registration.id_jag) {
-    /*
-     * Step-up complete: bind the (iss, sub) → user delegation so future
-     * ID-JAGs from this provider for this sub take the clean-match path.
-     */
+  if (registration.id_jag) {
+    /* Remember the (iss, sub) → user mapping so the next ID-JAG from
+     * this provider for this sub goes straight through without a
+     * ceremony. */
     upsertDelegation(
       registration.id_jag.iss,
       registration.id_jag.sub,
@@ -712,4 +714,58 @@ export function completeClaim(
   }
 
   return { ok: true, registration, user: signedInUser };
+}
+
+export type IdJagClaimResult =
+  | { ok: true; registration: Registration; user: User }
+  | {
+      ok: false;
+      error:
+        | "previously_claimed"
+        | "claim_expired"
+        | "wrong_kind"
+        | "ceremony_in_flight";
+    };
+
+/*
+ * Closes out a claim in one shot using an ID-JAG, no user_code
+ * ceremony needed. Binds the registration to the ID-JAG's user,
+ * records the (iss, sub, aud) as a delegation, and revokes any
+ * pre-claim access_tokens. The caller mints a fresh identity_assertion
+ * off the returned registration.
+ */
+export function completeAnonymousClaimViaIdJag(
+  registration: Registration,
+  idJag: { iss: string; sub: string; aud: string },
+  user: User,
+): IdJagClaimResult {
+  if (registration.kind !== "anonymous") {
+    return { ok: false, error: "wrong_kind" };
+  }
+  if (registration.status === "claimed") {
+    return { ok: false, error: "previously_claimed" };
+  }
+  if (registration.status === "expired") {
+    return { ok: false, error: "claim_expired" };
+  }
+  /* There's already a user_code ceremony in flight — the user might
+   * be looking at the /claim page right now. Let that finish (or time
+   * out) before the ID-JAG path takes over. */
+  if (registration.status === "pending_claim") {
+    return { ok: false, error: "ceremony_in_flight" };
+  }
+
+  registration.user_id = user.id;
+  registration.claimed_at = new Date();
+  registration.id_jag = idJag;
+  upsertDelegation(idJag.iss, idJag.sub, user.id);
+
+  /* Revoke pre-claim access_tokens — same as the user_code path. */
+  for (const cred of credentials.values()) {
+    if (cred.registration_id === registration.id && !cred.revoked) {
+      cred.revoked = true;
+    }
+  }
+
+  return { ok: true, registration, user };
 }

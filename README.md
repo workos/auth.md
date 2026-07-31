@@ -147,7 +147,7 @@ sequenceDiagram
     Note over Agent: Agent operates with pre-claim scopes
 
     User-->>Agent: Wants to take ownership
-    Agent->>Service: POST /agent/identity/claim<br/>{ claim_token, email }
+    Agent->>Service: POST /agent/identity/claim<br/>{ type: login_hint, claim_token, login_hint }
     Service-->>Agent: 200 OK (claim_attempt: user_code + verification_uri)
     Agent-->>User: Surface user_code + verification_uri
     User->>Service: GET verification_uri (signs in, lands on /claim)
@@ -163,5 +163,44 @@ sequenceDiagram
         Service-->>Agent: 200 OK (fresh claim_attempt: new user_code + verification_uri)
         Agent-->>User: Surface new user_code + verification_uri
       end
+    end
+```
+
+### Anonymous Registration Claimed via ID-JAG
+
+If the agent started anonymous, the user wants to claim the registration, and the agent can obtain an ID-JAG, it can bind the registration to that identity by presenting the ID-JAG at `/agent/identity/claim` with `type: identity_assertion`. Two branches:
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Agent
+    participant Provider as Agent Provider
+    participant Service
+
+    Agent->>Service: POST /agent/identity<br/>{ type: anonymous }
+    Service-->>Agent: 200 OK (identity_assertion v1, claim_token)
+
+    Note over Agent: Agent operates pre-claim<br/>(may exchange v1 for a pre-claim access_token)
+
+    User-->>Agent: Signs in at provider
+    Agent->>Provider: Request audience-specific ID-JAG
+    Provider-->>Agent: 200 OK (ID-JAG)
+
+    Agent->>Service: POST /agent/identity/claim<br/>{ type: identity_assertion, claim_token, assertion: ID-JAG }
+    Service->>Service: Verify ID-JAG + auth_time + matcher
+
+    alt No confirmation needed (no email conflict, or existing (iss, sub) delegation)
+        Service-->>Agent: 200 OK (status: claimed, identity_assertion v2)
+        Note over Agent: Pre-claim access_token revoked.<br/>Agent exchanges v2 at /oauth2/token<br/>via jwt-bearer for a fresh credential.
+    else Confirmation required (ID-JAG email matches an existing different account, no delegation)
+        Service-->>Agent: 200 OK (claim_attempt: user_code + verification_uri)
+        Agent-->>User: Surface user_code + verification_uri
+        User->>Service: GET verification_uri (signs in, lands on /claim)
+        User->>Service: POST /agent/identity/claim/complete<br/>{ claim_attempt_token, user_code }
+        Note over Service: Completion binds the anonymous reg<br/>to the signed-in user AND records<br/>the (iss, sub) delegation.
+        loop until claimed
+          Agent->>Service: POST /oauth2/token<br/>grant_type=claim&claim_token=...
+          Service-->>Agent: 200 OK (access_token + v2 identity_assertion) | authorization_pending
+        end
     end
 ```
