@@ -35,12 +35,6 @@ export type Delegation = {
 export type RegistrationKind = "anonymous" | "service_auth" | "id_jag";
 
 /**
- * The user-facing leg of the claim ceremony. Tracks the `claim_attempt_token`
- * that binds the verification URL to this registration and the `user_code`
- * the agent surfaces to the user. Naming follows RFC 8628 device
- * authorization.
- */
-/**
  * The identifier the agent hinted at — used to surface a mismatch advisory
  * if the signed-in user doesn't match. The wire stays a CIBA-shaped opaque
  * string; routes call `classifyLoginHint` at the edge to tag it. Structured
@@ -56,20 +50,35 @@ export function classifyLoginHint(s: string): LoginHint | undefined {
   return undefined;
 }
 
+/**
+ * The user-facing leg of the claim ceremony. Tracks the `claim_attempt_token`
+ * that binds the verification URL to this registration and the `user_code`
+ * the service reveals to the signed-in human — who reads it back to the agent.
+ * Naming follows RFC 8628 device authorization, but the code travels service
+ * → user → agent, so it's held plaintext here to reveal on the claim page
+ * (never returned to the agent) and matched when the agent submits it at
+ * claim/complete.
+ */
 export type RegistrationClaimAttempt = {
   id: string;
   /** Hash of the claim_attempt_token embedded in the verification URL. */
   view_token_hash: string;
   view_expires_at: Date;
-  /** Hash of the 6-digit user_code the agent surfaces to the user. */
-  user_code_hash: string;
-  user_code_generated_at: Date;
+  /** The 6-digit code, revealed to the confirming human to read back. */
+  user_code: string;
   user_code_expires_at: Date;
   /**
    * The hint the agent supplied when minting this attempt. Per-attempt so a
    * re-mint can carry a corrected hint without affecting prior attempts.
    */
   login_hint?: LoginHint;
+  /**
+   * Set when the signed-in human confirms on the claim page. Until then the
+   * agent's claim/complete returns `not_confirmed`. Captures which user
+   * confirmed so completion binds the registration to them.
+   */
+  confirmed_at?: Date;
+  confirmed_user_id?: string;
 };
 
 /**
@@ -146,6 +155,61 @@ export const credentials = new Map<string, Credential>();
 export const delegations = new Map<string, Delegation>();
 export const registrations = new Map<string, Registration>();
 export const seenJtis = new Map<string, number>();
+
+/**
+ * Rotating refresh tokens, keyed by hash. Issued to service_auth and claimed
+ * registrations at claim/complete; exchanged at /agent/identity (type:
+ * refresh) for a fresh identity assertion. Each exchange spends the presented
+ * token and mints a new one — a presented-but-spent token is a reuse signal.
+ */
+export type RefreshToken = {
+  token_hash: string;
+  registration_id: string;
+  expires_at: Date;
+  spent: boolean;
+};
+export const refreshTokens = new Map<string, RefreshToken>();
+
+export function mintRefreshToken(registrationId: string): {
+  value: string;
+  expiresAt: Date;
+} {
+  const value = `art_${randomBytes(24).toString("base64url")}`;
+  const expiresAt = new Date(Date.now() + config.refreshTokenTtlSeconds * 1000);
+  const token_hash = sha256Hex(value);
+  refreshTokens.set(token_hash, {
+    token_hash,
+    registration_id: registrationId,
+    expires_at: expiresAt,
+    spent: false,
+  });
+  return { value, expiresAt };
+}
+
+export type RotateRefreshTokenResult =
+  | { ok: true; registration: Registration; value: string; expiresAt: Date }
+  | { ok: false; error: "invalid" | "expired" | "spent" };
+
+export function rotateRefreshToken(
+  plaintext: string,
+): RotateRefreshTokenResult {
+  const record = refreshTokens.get(sha256Hex(plaintext));
+  if (!record) return { ok: false, error: "invalid" };
+  if (record.spent) return { ok: false, error: "spent" };
+  if (record.expires_at.getTime() < Date.now()) {
+    return { ok: false, error: "expired" };
+  }
+  const registration = registrations.get(record.registration_id);
+  if (!registration) return { ok: false, error: "invalid" };
+  record.spent = true;
+  const next = mintRefreshToken(record.registration_id);
+  return {
+    ok: true,
+    registration,
+    value: next.value,
+    expiresAt: next.expiresAt,
+  };
+}
 
 const seeded: User[] = [
   {
@@ -327,17 +391,18 @@ export function createAnonymousRegistration(): {
 }
 
 /**
- * service_auth registrations bundle the claim ceremony: the agent
- * receives a `user_code` and `verification_uri` in the registration response
- * and surfaces both to the user. The user signs in to the service, types the
- * code on the claim page, and ownership transfers.
+ * service_auth registrations bundle the first claim attempt: the agent
+ * receives a `verification_uri` (no code) in the registration response and
+ * hands it to the user. The user signs in to the service and confirms; the
+ * claim page then reveals the `user_code` for the user to read back to the
+ * agent, which submits it at claim/complete.
  */
-export function createServiceAuthRegistration(input: { login_hint: LoginHint }): {
+export function createServiceAuthRegistration(input: {
+  login_hint: LoginHint;
+}): {
   registration: Registration;
   claimTokenPlaintext: string;
   claimViewTokenPlaintext: string;
-  userCode: string;
-  userCodeExpiresAt: Date;
 } {
   const now = new Date();
   const registrationId = `reg_${randomBytes(16).toString("base64url")}`;
@@ -358,21 +423,14 @@ export function createServiceAuthRegistration(input: { login_hint: LoginHint }):
         view_expires_at: new Date(
           now.getTime() + config.claimViewTokenTtlSeconds * 1000,
         ),
-        user_code_hash: code.hash,
-        user_code_generated_at: now,
+        user_code: code.plaintext,
         user_code_expires_at: code.expiresAt,
         login_hint: input.login_hint,
       },
     },
   });
   registrations.set(registration.id, registration);
-  return {
-    registration,
-    claimTokenPlaintext,
-    claimViewTokenPlaintext,
-    userCode: code.plaintext,
-    userCodeExpiresAt: code.expiresAt,
-  };
+  return { registration, claimTokenPlaintext, claimViewTokenPlaintext };
 }
 
 function idJagRegistrationKey(iss: string, sub: string, aud: string): string {
@@ -406,8 +464,6 @@ export type FindOrCreateIdJagResult =
       registration: Registration;
       claimTokenPlaintext: string;
       claimViewTokenPlaintext: string;
-      userCode: string;
-      userCodeExpiresAt: Date;
     };
 
 export function findOrCreateIdJagRegistration(input: {
@@ -461,8 +517,7 @@ export function findOrCreateIdJagRegistration(input: {
       view_expires_at: new Date(
         now.getTime() + config.claimViewTokenTtlSeconds * 1000,
       ),
-      user_code_hash: code.hash,
-      user_code_generated_at: now,
+      user_code: code.plaintext,
       user_code_expires_at: code.expiresAt,
       login_hint: { kind: "email" as const, value: input.context.email },
     },
@@ -471,7 +526,7 @@ export function findOrCreateIdJagRegistration(input: {
   if (existing) {
     /*
      * Pending step-up exists — re-issue ceremony. Prior URL/code stop
-     * working; the agent surfaces the new ones to the user.
+     * working; the agent surfaces the new verification_uri to the user.
      */
     existing.claim = claim;
     return {
@@ -479,8 +534,6 @@ export function findOrCreateIdJagRegistration(input: {
       registration: existing,
       claimTokenPlaintext,
       claimViewTokenPlaintext,
-      userCode: code.plaintext,
-      userCodeExpiresAt: code.expiresAt,
     };
   }
 
@@ -497,8 +550,6 @@ export function findOrCreateIdJagRegistration(input: {
     registration,
     claimTokenPlaintext,
     claimViewTokenPlaintext,
-    userCode: code.plaintext,
-    userCodeExpiresAt: code.expiresAt,
   };
 }
 
@@ -529,8 +580,6 @@ export function recordClaimAttempt(
   login_hint: LoginHint,
 ): {
   claimViewTokenPlaintext: string;
-  userCode: string;
-  userCodeExpiresAt: Date;
 } {
   if (!registration.claim) {
     throw new Error("registration has no claim handle");
@@ -544,34 +593,56 @@ export function recordClaimAttempt(
     view_expires_at: new Date(
       now.getTime() + config.claimViewTokenTtlSeconds * 1000,
     ),
-    user_code_hash: code.hash,
-    user_code_generated_at: now,
+    user_code: code.plaintext,
     user_code_expires_at: code.expiresAt,
     login_hint,
   };
-  return {
-    claimViewTokenPlaintext: plaintext,
-    userCode: code.plaintext,
-    userCodeExpiresAt: code.expiresAt,
-  };
+  return { claimViewTokenPlaintext: plaintext };
 }
 
 /**
- * Mints a 6-digit user_code with its hash + expiry. Caller embeds the hash
- * on the attempt; the plaintext is returned to the agent (and read by the
- * user from the agent's UI).
+ * Mints a 6-digit user_code with its expiry. The plaintext is held on the
+ * attempt and revealed to the confirming human on the claim page (never
+ * returned to the agent); the agent submits it back at claim/complete.
  */
 function mintUserCode(now: Date): {
   plaintext: string;
-  hash: string;
   expiresAt: Date;
 } {
   const plaintext = String(randomInt(0, 1_000_000)).padStart(6, "0");
   return {
     plaintext,
-    hash: sha256Hex(plaintext),
     expiresAt: new Date(now.getTime() + config.userCodeTtlSeconds * 1000),
   };
+}
+
+export type ConfirmClaimViewResult =
+  | { ok: true; registration: Registration; userCode: string }
+  | { ok: false; error: "claim_expired" | "previously_claimed" };
+
+/**
+ * Called by the user-facing claim page after the signed-in human confirms.
+ * Binds the confirming user to the attempt and returns the user_code to
+ * reveal on the page. The agent never reaches this path — it later submits
+ * the code the user read back, at claim/complete.
+ */
+export function confirmClaimView(
+  registration: Registration,
+  signedInUser: User,
+): ConfirmClaimViewResult {
+  if (registration.status === "claimed") {
+    return { ok: false, error: "previously_claimed" };
+  }
+  if (registration.status === "expired") {
+    return { ok: false, error: "claim_expired" };
+  }
+  const attempt = registration.claim?.attempt;
+  if (!attempt) {
+    return { ok: false, error: "claim_expired" };
+  }
+  attempt.confirmed_at = new Date();
+  attempt.confirmed_user_id = signedInUser.id;
+  return { ok: true, registration, userCode: attempt.user_code };
 }
 
 export type CompleteClaimResult =
@@ -579,6 +650,7 @@ export type CompleteClaimResult =
   | {
       ok: false;
       error:
+        | "not_confirmed"
         | "user_code_invalid"
         | "user_code_expired"
         | "previously_claimed"
@@ -586,14 +658,14 @@ export type CompleteClaimResult =
     };
 
 /**
- * Called by the user-facing `/claim` form handler after authenticating the
- * user via the session cookie. The agent never reaches this code path —
- * it polls `/oauth2/token` with the claim grant for the resulting status.
+ * Agent-facing claim completion. The agent presents the user_code the human
+ * read off the claim page. We require the attempt to have been confirmed by
+ * a signed-in human first (`not_confirmed` otherwise), then bind the
+ * registration to that user.
  */
-export function completeClaim(
+export function completeClaimByAgent(
   registration: Registration,
   userCode: string,
-  signedInUser: User,
 ): CompleteClaimResult {
   if (registration.status === "claimed") {
     return { ok: false, error: "previously_claimed" };
@@ -605,26 +677,28 @@ export function completeClaim(
   if (!attempt) {
     return { ok: false, error: "claim_expired" };
   }
+  if (!attempt.confirmed_at || !attempt.confirmed_user_id) {
+    return { ok: false, error: "not_confirmed" };
+  }
   if (attempt.user_code_expires_at.getTime() < Date.now()) {
     return { ok: false, error: "user_code_expired" };
   }
-  if (sha256Hex(userCode) !== attempt.user_code_hash) {
+  if (userCode !== attempt.user_code) {
     return { ok: false, error: "user_code_invalid" };
   }
+  const user = users.get(attempt.confirmed_user_id);
+  if (!user) {
+    return { ok: false, error: "claim_expired" };
+  }
 
-  registration.user_id = signedInUser.id;
+  registration.user_id = user.id;
   registration.claimed_at = new Date();
-  /*
-   * Keep the claim handle around so the agent's poll can resolve the
-   * registration by claim_token after completion. `status === "claimed"`
-   * already prevents re-completion.
-   */
 
   if (registration.kind === "anonymous") {
     /*
-     * Revoke any pre-claim access_tokens. The agent's claim-grant poll on
-     * /oauth2/token will return a fresh post-claim access_token + v2
-     * identity_assertion; the pre-claim credentials are no longer the
+     * Revoke any pre-claim access_tokens. The agent re-exchanges the
+     * post-claim identity assertion returned by claim/complete for a fresh
+     * post-claim access_token; the pre-claim credentials are no longer the
      * canonical handle.
      */
     for (const cred of credentials.values()) {
@@ -639,12 +713,8 @@ export function completeClaim(
      * Step-up complete: bind the (iss, sub) → user delegation so future
      * ID-JAGs from this provider for this sub take the clean-match path.
      */
-    upsertDelegation(
-      registration.id_jag.iss,
-      registration.id_jag.sub,
-      signedInUser.id,
-    );
+    upsertDelegation(registration.id_jag.iss, registration.id_jag.sub, user.id);
   }
 
-  return { ok: true, registration, user: signedInUser };
+  return { ok: true, registration, user };
 }

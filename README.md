@@ -31,7 +31,7 @@ Service at <http://localhost:8000>, provider at <http://localhost:4000>. The ser
 
 ## System Flows
 
-Registration and credential issuance are split across two endpoints. `POST /agent/identity` accepts the agent's chosen identity assertion (ID-JAG, verified email, or anonymous) and returns a service-signed `identity_assertion`. The agent then exchanges that assertion at `POST /oauth2/token` (RFC 7523 JWT-bearer grant) for an access_token.
+Registration and credential issuance are split across two endpoints. `POST /agent/identity` accepts the agent's chosen identity type (ID-JAG, service_auth via email, or anonymous). ID-JAG and anonymous return a service-signed `identity.assertion` immediately; service_auth returns a claim ceremony to run first. The agent then exchanges the assertion at `POST /oauth2/token` (RFC 7523 JWT-bearer grant) for an access_token.
 
 ### Discovery
 
@@ -47,21 +47,20 @@ Hosted at `/.well-known/oauth-authorization-server`:
   "issuer": "https://auth.service.example.com",
   "token_endpoint": "https://auth.service.example.com/oauth2/token",
   "revocation_endpoint": "https://auth.service.example.com/oauth2/revoke",
-  "grant_types_supported": [
-    "urn:ietf:params:oauth:grant-type:jwt-bearer",
-    "urn:workos:agent-auth:grant-type:claim"
-  ],
+  "grant_types_supported": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
 
   "agent_auth": {
     "skill": "https://service.example.com/auth.md",
     "identity_endpoint": "https://auth.service.example.com/agent/identity",
     "claim_endpoint": "https://auth.service.example.com/agent/identity/claim",
     "events_endpoint": "https://auth.service.example.com/agent/event/notify",
-    "identity_types_supported": ["anonymous", "identity_assertion", "service_auth"],
+    "identity_types_supported": [
+      "anonymous",
+      "identity_assertion",
+      "service_auth"
+    ],
     "identity_assertion": {
-      "assertion_types_supported": [
-        "urn:ietf:params:oauth:token-type:id-jag"
-      ]
+      "assertion_types_supported": ["urn:ietf:params:oauth:token-type:id-jag"]
     },
     "events_supported": [
       "https://schemas.workos.com/events/agent/auth/identity/assertion/revoked"
@@ -98,13 +97,13 @@ sequenceDiagram
     Agent->>Service: POST /agent/identity<br/>{ type: identity_assertion, assertion: ID-JAG }
     Service->>Provider: GET /.well-known/jwks.json
     Provider-->>Service: 200 OK (JSON Web Key Set)
-    Service-->>Agent: 200 OK (identity_assertion)
+    Service-->>Agent: 200 OK (identity.assertion)
 
     Agent->>Service: POST /oauth2/token<br/>grant_type=jwt-bearer&assertion=...
     Service-->>Agent: 200 OK (access_token)
 ```
 
-### Verified-Email Identity Assertion
+### Service Auth (Email-Based Claim)
 
 ```mermaid
 sequenceDiagram
@@ -113,22 +112,22 @@ sequenceDiagram
     participant Service
 
     Agent->>Service: POST /agent/identity<br/>{ type: service_auth, login_hint: email }
-    Service-->>Agent: 200 OK (claim_token, claim: user_code + verification_uri)
-    Agent-->>User: Surface user_code + verification_uri
-    User->>Service: GET verification_uri (signs in, lands on /claim)
-    User->>Service: POST /agent/identity/claim/complete<br/>{ claim_attempt_token, user_code }
-
-    loop until claimed
-      Agent->>Service: POST /oauth2/token<br/>grant_type=claim&claim_token=...
-      alt user_code window open
-        Service-->>Agent: 200 OK (access_token + identity_assertion) | authorization_pending
-      else user_code expired (outer claim window still open)
-        Service-->>Agent: 400 expired_token
-        Agent->>Service: POST /agent/identity/claim<br/>{ claim_token, email }
-        Service-->>Agent: 200 OK (fresh claim_attempt: new user_code + verification_uri)
-        Agent-->>User: Surface new user_code + verification_uri
-      end
+    Service-->>Agent: 200 OK (claim.token, claim.attempt.verification_uri)
+    Agent-->>User: Surface verification_uri (no code)
+    User->>Service: GET verification_uri (signs in, lands on /agent-claim)
+    Service-->>User: Reveals user_code on the page
+    User-->>Agent: Reads user_code back
+    Agent->>Service: POST /agent/identity/claim/complete<br/>{ claim_token, user_code }
+    alt user_code correct & confirmed
+      Service-->>Agent: 200 OK (identity.assertion + refresh_token)
+    else user_code window expired
+      Service-->>Agent: 410 user_code_expired
+      Agent->>Service: POST /agent/identity/claim<br/>{ type: service_auth, claim_token, login_hint }
+      Service-->>Agent: 200 OK (fresh attempt.verification_uri)
+      Agent-->>User: Surface new verification_uri
     end
+    Agent->>Service: POST /oauth2/token<br/>grant_type=jwt-bearer&assertion=...
+    Service-->>Agent: 200 OK (access_token)
 ```
 
 ### Anonymous Registration with Claim Ceremony
@@ -140,28 +139,21 @@ sequenceDiagram
     participant Service
 
     Agent->>Service: POST /agent/identity<br/>{ type: anonymous }
-    Service-->>Agent: 200 OK (identity_assertion, claim_token)
+    Service-->>Agent: 200 OK (identity.assertion, claim.token)
     Agent->>Service: POST /oauth2/token<br/>grant_type=jwt-bearer&assertion=...
     Service-->>Agent: 200 OK (access_token with pre-claim scope)
 
     Note over Agent: Agent operates with pre-claim scopes
 
     User-->>Agent: Wants to take ownership
-    Agent->>Service: POST /agent/identity/claim<br/>{ claim_token, email }
-    Service-->>Agent: 200 OK (claim_attempt: user_code + verification_uri)
-    Agent-->>User: Surface user_code + verification_uri
-    User->>Service: GET verification_uri (signs in, lands on /claim)
-    User->>Service: POST /agent/identity/claim/complete<br/>{ claim_attempt_token, user_code }
-
-    loop until claimed
-      Agent->>Service: POST /oauth2/token<br/>grant_type=claim&claim_token=...
-      alt user_code window open
-        Service-->>Agent: 200 OK (post-claim access_token + v2 identity_assertion) | authorization_pending
-      else user_code expired (outer claim window still open)
-        Service-->>Agent: 400 expired_token
-        Agent->>Service: POST /agent/identity/claim<br/>{ claim_token, email }
-        Service-->>Agent: 200 OK (fresh claim_attempt: new user_code + verification_uri)
-        Agent-->>User: Surface new user_code + verification_uri
-      end
-    end
+    Agent->>Service: POST /agent/identity/claim<br/>{ type: service_auth, claim_token, login_hint }
+    Service-->>Agent: 200 OK (attempt.verification_uri)
+    Agent-->>User: Surface verification_uri (no code)
+    User->>Service: GET verification_uri (signs in, lands on /agent-claim)
+    Service-->>User: Reveals user_code on the page
+    User-->>Agent: Reads user_code back
+    Agent->>Service: POST /agent/identity/claim/complete<br/>{ claim_token, user_code }
+    Service-->>Agent: 200 OK (v2 identity.assertion + refresh_token)
+    Agent->>Service: POST /oauth2/token<br/>grant_type=jwt-bearer&assertion=...
+    Service-->>Agent: 200 OK (post-claim access_token)
 ```

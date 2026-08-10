@@ -124,7 +124,7 @@ function renderHtml(): string {
 
 <section id="step-3" class="track-anon" hidden>
   <h2><span class="num">3</span>Register anonymously</h2>
-  <p>An agent without a user identity POSTs <code>{ "type": "anonymous" }</code> to <code>/agent/identity</code>. The service returns a service-signed <code>identity_assertion</code> bound to the new registration plus a <code>claim_token</code> for the human-handoff ceremony.</p>
+  <p>An agent without a user identity POSTs <code>{ "type": "anonymous" }</code> to <code>/agent/identity</code>. The service returns a service-signed assertion under <code>identity.assertion</code> plus a <code>claim.token</code> for the later human-handoff ceremony.</p>
   <div class="label">Request</div>
   <div class="req"><pre>POST /agent/identity
 Content-Type: application/json
@@ -136,7 +136,7 @@ Content-Type: application/json
 
 <section id="step-4" class="track-anon" hidden>
   <h2><span class="num">4</span>Exchange the assertion for a pre-claim access_token</h2>
-  <p>The agent POSTs the <code>identity_assertion</code> to <code>/oauth2/token</code> with the RFC 7523 JWT-bearer grant type. The response is a standard OAuth token envelope; the <code>scope</code> reflects the unclaimed pre-claim scope set.</p>
+  <p>The agent POSTs <code>identity.assertion</code> to <code>/oauth2/token</code> with the RFC 7523 JWT-bearer grant type. The response is a standard OAuth token envelope; the <code>scope</code> reflects the unclaimed pre-claim scope set.</p>
   <div class="label">Request</div>
   <div class="req" id="anon-exchange-req"><pre></pre></div>
   <button class="primary" type="button" data-action="anon-exchange">Exchange at /oauth2/token</button>
@@ -151,9 +151,9 @@ Content-Type: application/json
 </section>
 
 <section id="step-6" class="track-anon" hidden>
-  <h2><span class="num">6</span>Initiate the claim ceremony</h2>
-  <p>The agent invites a human to take ownership. <code>POST /agent/identity/claim</code> returns a <code>user_code</code> (to surface to the user) and a <code>verification_uri</code> (where they sign in and type the code). Shape follows <a href="https://datatracker.ietf.org/doc/html/rfc8628" target="_blank">RFC 8628 device authorization</a>.</p>
-  <label>Claiming user email
+  <h2><span class="num">6</span>Start the claim ceremony</h2>
+  <p>The agent invites a human to take ownership. <code>POST /agent/identity/claim</code> — <code>type</code> is always <code>service_auth</code> (the claim method), even for an anonymous registration — returns an <code>attempt.verification_uri</code> to hand the user. No code comes back to the agent; it's shown to the user on the page.</p>
+  <label>Claiming user email (login_hint)
     <input id="anon-claim-email" value="alice@example.com">
   </label>
   <div class="label">Request</div>
@@ -163,21 +163,26 @@ Content-Type: application/json
 </section>
 
 <section id="step-7" class="track-anon" hidden>
-  <h2><span class="num">7</span>Surface the code to the user</h2>
-  <p>The agent shows the user the verification URL and the 6-digit code. The user opens the URL, signs in to the service, and types the code on the service-owned claim page. The code travels agent → user → service — it never goes back to the agent.</p>
+  <h2><span class="num">7</span>Hand off the link, then complete with the code</h2>
+  <p>The agent gives the user the verification URL — no code. The user opens it, signs in, confirms, and the service-owned page <em>reveals</em> a 6-digit code. The user reads that code back to the agent, which submits it to <code>/agent/identity/claim/complete</code>. The code travels service → user → agent. Completion returns the post-claim <code>identity.assertion</code> and a rotating <code>refresh_token</code>, and revokes the pre-claim token.</p>
   <div id="anon-ceremony"></div>
+  <label>Code the user read back
+    <input class="otp" id="anon-user-code" maxlength="6" inputmode="numeric" placeholder="000000">
+  </label>
+  <button class="primary" type="button" data-action="anon-complete">Complete claim</button>
+  <div id="anon-complete-out"></div>
 </section>
 
 <section id="step-8" class="track-anon" hidden>
-  <h2><span class="num">8</span>Poll <code>/oauth2/token</code> with the claim grant</h2>
-  <p>Polling happens at the standard token endpoint with a profile-specific grant (<code>urn:workos:agent-auth:grant-type:claim</code>) — custom URN, so it doesn't collide with services that also implement standard RFC 8628 device auth. While the user is still in the ceremony: <code>{ "error": "authorization_pending" }</code>. On completion: a standard OAuth token response, with a fresh post-claim access_token plus a v2 <code>identity_assertion</code> (this one has the user's email populated, unlike the pre-claim v1).</p>
-  <button class="primary" type="button" data-action="anon-poll">Poll once</button>
-  <div id="anon-poll-out"></div>
+  <h2><span class="num">8</span>Exchange the post-claim assertion</h2>
+  <p>The post-claim <code>identity.assertion</code> goes back to <code>/oauth2/token</code> (same JWT-bearer grant). This one resolves to a claimed registration, so it mints an access_token with the full post-claim scope set.</p>
+  <button class="primary" type="button" data-action="anon-exchange-post">Exchange at /oauth2/token</button>
+  <div id="anon-exchange-post-out"></div>
 </section>
 
 <section id="step-9" class="track-anon" hidden>
   <h2><span class="num">9</span>Call with the post-claim access_token</h2>
-  <p>The access_token from the claim grant has the full post-claim scope set. The pre-claim access_token was revoked at ceremony completion.</p>
+  <p>The post-claim access_token carries the full scope set. The pre-claim access_token was revoked at ceremony completion.</p>
   <button class="primary" type="button" data-action="anon-call-post">Call /api/resource</button>
   <div id="anon-post-out"></div>
 </section>
@@ -185,11 +190,11 @@ Content-Type: application/json
 </div>
 
 <div class="track">
-<p class="track-header email" id="track-b-header" hidden>Track B — Email-verification registration</p>
+<p class="track-header email" id="track-b-header" hidden>Track B — service_auth registration</p>
 
 <section id="step-10" class="track-email" hidden>
-  <h2><span class="num">10</span>Register with an email assertion</h2>
-  <p>The agent has the user's email but no provider-signed assertion. It POSTs <code>/agent/identity</code> with <code>type: service_auth</code>. The response bundles the ceremony block (<code>user_code</code>, <code>verification_uri</code>, <code>interval</code>) — no separate <code>/claim</code> call needed.</p>
+  <h2><span class="num">10</span>Register with a service_auth login_hint</h2>
+  <p>The agent has the user's email but no provider-signed assertion. It POSTs <code>/agent/identity</code> with <code>type: service_auth</code>. The response bundles the first attempt under <code>claim.attempt.verification_uri</code> — no separate <code>/claim</code> call needed.</p>
   <label>User email
     <input id="email-assertion" value="alice@example.com">
   </label>
@@ -200,23 +205,31 @@ Content-Type: application/json
 </section>
 
 <section id="step-11" class="track-email" hidden>
-  <h2><span class="num">11</span>Surface the code to the user</h2>
-  <p>Same as Track A: the agent shows the user the verification URL and the 6-digit code. The user signs in to the service (as the asserted email) and types the code on the claim page.</p>
+  <h2><span class="num">11</span>Hand off the link, then complete with the code</h2>
+  <p>Same handoff as Track A: the agent gives the user the verification URL; the user signs in, confirms, and reads back the 6-digit code the page reveals. The agent submits it to <code>/agent/identity/claim/complete</code> and collects the <code>identity.assertion</code> + <code>refresh_token</code>.</p>
   <div id="email-ceremony"></div>
+  <label>Code the user read back
+    <input class="otp" id="email-user-code" maxlength="6" inputmode="numeric" placeholder="000000">
+  </label>
+  <button class="primary" type="button" data-action="email-complete">Complete claim</button>
+  <div id="email-complete-out"></div>
 </section>
 
 <section id="step-12" class="track-email" hidden>
-  <h2><span class="num">12</span>Poll <code>/oauth2/token</code> with the claim grant</h2>
-  <p>Same poll endpoint as Track A. While pending: <code>{ "error": "authorization_pending" }</code>. On completion: standard OAuth token response with a fresh access_token plus an <code>identity_assertion</code> (the agent uses this for jwt-bearer refreshes when the access_token expires).</p>
-  <button class="primary" type="button" data-action="email-poll">Poll once</button>
-  <div id="email-poll-out"></div>
+  <h2><span class="num">12</span>Exchange the assertion at <code>/oauth2/token</code></h2>
+  <p>The <code>identity.assertion</code> goes to the OAuth token endpoint with the RFC 7523 JWT-bearer grant; the response is a standard access_token with the post-claim scope set.</p>
+  <div class="label">Request</div>
+  <div class="req" id="email-token-req"><pre></pre></div>
+  <button class="primary" type="button" data-action="email-exchange">Exchange</button>
+  <div id="email-exchange-out"></div>
 </section>
 
 <section id="step-13" class="track-email" hidden>
   <h2><span class="num">13</span>Call <code>/api/resource</code></h2>
-  <p>The access_token from the claim grant goes straight to the API. No re-exchange needed — the claim grant already returned a usable credential.</p>
+  <p>With the post-claim access_token the agent calls the protected API.</p>
   <button class="primary" type="button" data-action="email-call">Call /api/resource</button>
   <div id="email-call-out"></div>
+  <p class="note" style="margin-top:1rem">When the assertion later expires, the agent doesn't re-register — it POSTs <code>{ "type": "refresh", "refresh_token": "…" }</code> to <code>/agent/identity</code> for a fresh assertion (and a rotated refresh token).</p>
 </section>
 
 </div>
@@ -225,8 +238,8 @@ Content-Type: application/json
 <p class="track-header ia" id="track-c-header" hidden>Track C — ID-JAG identity assertion</p>
 
 <section id="step-14" hidden>
-  <h2><span class="num">14</span>Exchange an ID-JAG for an identity_assertion</h2>
-  <p>Paste an ID-JAG minted by the provider (run the <a href="${providerHint}" target="_blank">provider demo</a> through its exchange step, then copy the <code>assertion</code> value). The consumer verifies the signature against the provider's JWKS, enforces replay protection, and returns a service-signed identity_assertion bound to the matched user.</p>
+  <h2><span class="num">14</span>Exchange an ID-JAG for an identity assertion</h2>
+  <p>Paste an ID-JAG minted by the provider (run the <a href="${providerHint}" target="_blank">provider demo</a> through its exchange step, then copy the <code>assertion</code> value). The consumer verifies the signature against the provider's JWKS, enforces replay protection, and returns a service-signed assertion under <code>identity.assertion</code> bound to the matched user.</p>
   <label>ID-JAG assertion
     <textarea id="assertion" placeholder="eyJhbGc..."></textarea>
   </label>
@@ -238,7 +251,7 @@ Content-Type: application/json
 
 <section id="step-15" hidden>
   <h2><span class="num">15</span>Exchange the assertion at /oauth2/token</h2>
-  <p>The service-signed identity_assertion goes to the OAuth token endpoint with the RFC 7523 JWT-bearer grant; the response is a standard access_token.</p>
+  <p>The service-signed <code>identity.assertion</code> goes to the OAuth token endpoint with the RFC 7523 JWT-bearer grant; the response is a standard access_token.</p>
   <div class="label">Request</div>
   <div class="req" id="token-req"><pre></pre></div>
   <button class="primary" type="button" data-action="token-exchange">Exchange</button>
@@ -252,7 +265,7 @@ Content-Type: application/json
   <div class="req" id="call-req"><pre></pre></div>
   <button class="primary" type="button" data-action="call">Call /api/resource</button>
   <div id="call-out"></div>
-  <p class="note" style="margin-top:1rem">Revocation has two surfaces. RFC 7009 token revocation at <code>/oauth2/revoke</code> kills one access_token; the agent can re-exchange the identity_assertion to mint a fresh one. The provider can also POST a <code>secevent+jwt</code> (RFC 8417 SET, delivered per RFC 8935) to <code>/agent/event/notify</code>, which invalidates all credentials for the <code>(iss, sub, aud)</code> — see the provider demo's revoke step.</p>
+  <p class="note" style="margin-top:1rem">Revocation has two surfaces. RFC 7009 token revocation at <code>/oauth2/revoke</code> kills one access_token; the agent can re-exchange the identity assertion to mint a fresh one. The provider can also POST a <code>secevent+jwt</code> (RFC 8417 SET, delivered per RFC 8935) to <code>/agent/event/notify</code>, which invalidates all credentials for the <code>(iss, sub, aud)</code> — see the provider demo's revoke step.</p>
 </section>
 </div>
 </div>
@@ -335,14 +348,15 @@ function updateCallPreview() {
 }
 function updateAnonExchangePreview() {
   const params = "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=" +
-    abbrev(state.anon_identity_assertion);
+    abbrev(state.anon_assertion);
   document.querySelector("#anon-exchange-req pre").textContent =
     "POST /oauth2/token\\nContent-Type: application/x-www-form-urlencoded\\n\\n" + params;
 }
 function updateAnonClaimPreview() {
   const body = {
+    type: "service_auth",
     claim_token: abbrev(state.anon_claim_token),
-    email: document.getElementById("anon-claim-email").value,
+    login_hint: document.getElementById("anon-claim-email").value,
   };
   document.querySelector("#anon-claim-req pre").textContent =
     "POST /agent/identity/claim\\nContent-Type: application/json\\n\\n" + jsonStr(body);
@@ -355,17 +369,25 @@ function updateEmailRegisterPreview() {
   document.querySelector("#email-register-req pre").textContent =
     "POST /agent/identity\\nContent-Type: application/json\\n\\n" + jsonStr(body);
 }
+function updateEmailTokenPreview() {
+  const params = "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=" +
+    abbrev(state.email_assertion);
+  document.querySelector("#email-token-req pre").textContent =
+    "POST /oauth2/token\\nContent-Type: application/x-www-form-urlencoded\\n\\n" + params;
+}
 
-function renderCeremony(containerId, ceremony) {
+/*
+ * Renders the verification link the agent hands to the user. No code here —
+ * the user_code is shown to the user on the service-owned claim page and read
+ * back to the agent.
+ */
+function renderCeremony(containerId, verificationUri) {
   document.getElementById(containerId).innerHTML =
     '<div class="note">' +
-    '<p style="margin: 0 0 .5rem; color: var(--brand-text);"><strong>Show the user:</strong></p>' +
-    '<p style="margin: 0 0 .25rem;"><a href="' + escapeHtml(ceremony.verification_uri) + '" target="_blank">' +
-      escapeHtml(ceremony.verification_uri) + '</a></p>' +
-    '<p style="margin: 0; font-family: ui-monospace, monospace; font-size: 1.4rem; letter-spacing: .3rem; color: var(--brand-text);">Code: ' +
-      escapeHtml(ceremony.user_code) + '</p>' +
-    '<p style="margin: .5rem 0 0; font-size: .8rem;">Expires in ' + ceremony.expires_in +
-      's. Poll interval: ' + ceremony.interval + 's.</p>' +
+    '<p style="margin: 0 0 .5rem; color: var(--brand-text);"><strong>Give the user this link (open it to run the ceremony):</strong></p>' +
+    '<p style="margin: 0;"><a href="' + escapeHtml(verificationUri) + '" target="_blank">' +
+      escapeHtml(verificationUri) + '</a></p>' +
+    '<p style="margin: .5rem 0 0; font-size: .8rem;">They sign in, confirm, and read back the 6-digit code the page shows. Paste it below.</p>' +
     '</div>';
 }
 
@@ -390,10 +412,12 @@ document.body.addEventListener("click", (e) => {
   if (a === "anon-exchange") anonExchange();
   if (a === "anon-call-pre") anonCallPre();
   if (a === "anon-claim") anonClaim();
-  if (a === "anon-poll") anonPoll();
+  if (a === "anon-complete") anonComplete();
+  if (a === "anon-exchange-post") anonExchangePost();
   if (a === "anon-call-post") anonCallPost();
   if (a === "email-register") emailRegister();
-  if (a === "email-poll") emailPoll();
+  if (a === "email-complete") emailComplete();
+  if (a === "email-exchange") emailExchange();
   if (a === "email-call") emailCall();
   if (a === "exchange") exchange();
   if (a === "token-exchange") tokenExchange();
@@ -441,9 +465,9 @@ async function anonRegister() {
   });
   document.getElementById("anon-register-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
-  state.anon_identity_assertion = r.body.identity_assertion;
-  state.anon_claim_token = r.body.claim_token;
-  state.anon_registration_id = r.body.registration_id;
+  state.anon_assertion = r.body.identity.assertion;
+  state.anon_claim_token = r.body.claim.token;
+  state.anon_registration_id = r.body.id;
   updateAnonExchangePreview();
   updateAnonClaimPreview();
   markDone("step-3");
@@ -453,7 +477,7 @@ async function anonRegister() {
 async function anonExchange() {
   const r = await formFetch("/oauth2/token", {
     grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-    assertion: state.anon_identity_assertion,
+    assertion: state.anon_assertion,
   });
   document.getElementById("anon-exchange-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
@@ -472,29 +496,42 @@ async function anonCallPre() {
 
 async function anonClaim() {
   const body = {
+    type: "service_auth",
     claim_token: state.anon_claim_token,
-    email: document.getElementById("anon-claim-email").value,
+    login_hint: document.getElementById("anon-claim-email").value,
   };
   const r = await jsonFetch("/agent/identity/claim", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("anon-claim-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
-  renderCeremony("anon-ceremony", r.body.claim_attempt);
+  renderCeremony("anon-ceremony", r.body.attempt.verification_uri);
   markDone("step-6");
   reveal("step-7");
-  document.getElementById("step-8").hidden = false;
 }
 
-async function anonPoll() {
-  const r = await formFetch("/oauth2/token", {
-    grant_type: "urn:workos:agent-auth:grant-type:claim",
+async function anonComplete() {
+  const body = {
     claim_token: state.anon_claim_token,
-  });
-  document.getElementById("anon-poll-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
+    user_code: document.getElementById("anon-user-code").value.trim(),
+  };
+  const r = await jsonFetch("/agent/identity/claim/complete", { method: "POST", body: JSON.stringify(body) });
+  document.getElementById("anon-complete-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
-  /* Claim grant succeeded: response carries access_token + v2 identity_assertion. */
-  state.anon_access_token = r.body.access_token;
-  state.anon_identity_assertion = r.body.identity_assertion;
+  /* Post-claim identity: v2 assertion (now carries the user's email) + refresh token. */
+  state.anon_assertion = r.body.identity.assertion;
+  state.anon_refresh_token = r.body.identity.refresh_token.value;
+  updateAnonExchangePreview();
   markDone("step-7");
+  reveal("step-8");
+}
+
+async function anonExchangePost() {
+  const r = await formFetch("/oauth2/token", {
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion: state.anon_assertion,
+  });
+  document.getElementById("anon-exchange-post-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
+  if (!r.ok) return;
+  state.anon_access_token = r.body.access_token;
   markDone("step-8");
   reveal("step-9");
 }
@@ -516,35 +553,41 @@ async function emailRegister() {
   const r = await jsonFetch("/agent/identity", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("email-register-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
-  state.email_claim_token = r.body.claim_token;
-  state.email_registration_id = r.body.registration_id;
-  renderCeremony("email-ceremony", r.body.claim);
+  state.email_claim_token = r.body.claim.token;
+  state.email_registration_id = r.body.id;
+  renderCeremony("email-ceremony", r.body.claim.attempt.verification_uri);
   markDone("step-10");
   reveal("step-11");
-  document.getElementById("step-12").hidden = false;
 }
 
-async function emailPoll() {
-  const r = await formFetch("/oauth2/token", {
-    grant_type: "urn:workos:agent-auth:grant-type:claim",
+async function emailComplete() {
+  const body = {
     claim_token: state.email_claim_token,
+    user_code: document.getElementById("email-user-code").value.trim(),
+  };
+  const r = await jsonFetch("/agent/identity/claim/complete", { method: "POST", body: JSON.stringify(body) });
+  document.getElementById("email-complete-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
+  if (!r.ok) return;
+  state.email_assertion = r.body.identity.assertion;
+  state.email_refresh_token = r.body.identity.refresh_token.value;
+  updateEmailTokenPreview();
+  markDone("step-11");
+  reveal("step-12");
+}
+
+async function emailExchange() {
+  const r = await formFetch("/oauth2/token", {
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion: state.email_assertion,
   });
-  document.getElementById("email-poll-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
+  document.getElementById("email-exchange-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
   state.email_access_token = r.body.access_token;
-  state.email_identity_assertion = r.body.identity_assertion;
-  markDone("step-11");
   markDone("step-12");
   reveal("step-13");
 }
 
 async function emailCall() {
-  /*
-   * The claim grant already returned an access_token alongside the v2
-   * identity_assertion — just use it. (The identity_assertion is what the
-   * agent uses to mint future access_tokens via jwt-bearer once this one
-   * expires.)
-   */
   const r = await jsonFetch("/api/resource", {
     headers: { authorization: "Bearer " + state.email_access_token },
   });
@@ -567,7 +610,7 @@ async function exchange() {
   const r = await jsonFetch("/agent/identity", { method: "POST", body: JSON.stringify(body) });
   document.getElementById("exchange-out").innerHTML = resBlock(r.status, null, r.body, r.ok);
   if (!r.ok) return;
-  state.identity_assertion = r.body.identity_assertion;
+  state.identity_assertion = r.body.identity.assertion;
   updateTokenPreview();
   markDone("step-14");
   reveal("step-15");

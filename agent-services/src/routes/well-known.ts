@@ -27,10 +27,7 @@ wellKnownRouter.get("/.well-known/oauth-authorization-server", (_req, res) => {
     issuer: config.baseUrl,
     token_endpoint: `${config.baseUrl}${config.tokenEndpointPath}`,
     revocation_endpoint: `${config.baseUrl}${config.revocationEndpointPath}`,
-    grant_types_supported: [
-      "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      "urn:workos:agent-auth:grant-type:claim",
-    ],
+    grant_types_supported: ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
 
     agent_auth: {
       skill: `${config.baseUrl}/auth.md`,
