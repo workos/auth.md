@@ -181,7 +181,7 @@ Consider also publishing an `auth.md` at your root — a short, LLM-readable sum
 
 ### Hosting the /agent/identity Endpoint
 
-The endpoint dispatches on the `type` field. All requests scope to a single tenant / environment; how the service resolves that scope (hostname, bearer token, path prefix) is up to the implementation. Every path through this endpoint returns a service-signed `identity_assertion` (a JWT with `typ: oauth-id-jag+jwt` and `sub = registration.id`) — never a credential. The agent exchanges that assertion at [`/oauth2/token`](#post-oauth2token--rfc-7523-jwt-bearer-grant) to obtain an access_token.
+The endpoint dispatches on the `type` field. All requests scope to a single tenant / environment; how the service resolves that scope (hostname, bearer token, path prefix) is up to the implementation. Every path through this endpoint returns a service-signed `identity_assertion` (a JWT with `typ: oauth-id-jag+jwt` and `sub = registration.id`) — never a credential. The agent exchanges that assertion at [`/oauth2/token`](#jwt-bearer-grant-rfc-7523) to obtain an access_token.
 
 ```http
 POST /agent/identity HTTP/1.1
