@@ -1,0 +1,38 @@
+{
+  "manifest_version": "0.3",
+  "name": "authmd-agent-client",
+  "display_name": "auth.md Agent Client",
+  "version": "0.1.0",
+  "description": "Agentic registration for services that support the auth.md protocol: authenticate, complete claim ceremonies, and make authenticated requests.",
+  "author": {
+    "name": "WorkOS",
+    "url": "https://github.com/workos/auth.md"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workos/auth.md"
+  },
+  "license": "MIT",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/mcp/server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/mcp/server.js"]
+    }
+  },
+  "tools": [
+    {
+      "name": "authmd_authenticate",
+      "description": "Authenticate to an auth.md-capable service; returns credentials or claim ceremony materials."
+    },
+    {
+      "name": "authmd_complete_claim",
+      "description": "Complete a claim ceremony with the code the user read back from the claim page."
+    },
+    {
+      "name": "authmd_fetch",
+      "description": "Make an authenticated HTTP request with automatic credential refresh."
+    }
+  ]
+}
