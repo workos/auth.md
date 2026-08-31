@@ -110,6 +110,7 @@ export class Registration {
   user_id?: string;
   created_at: Date;
   claimed_at?: Date;
+  revoked_at?: Date;
   claim?: RegistrationClaim;
   id_jag?: RegistrationIdJag;
 
@@ -119,6 +120,7 @@ export class Registration {
     created_at: Date;
     user_id?: string;
     claimed_at?: Date;
+    revoked_at?: Date;
     claim?: RegistrationClaim;
     id_jag?: RegistrationIdJag;
   }) {
@@ -127,6 +129,7 @@ export class Registration {
     this.user_id = init.user_id;
     this.created_at = init.created_at;
     this.claimed_at = init.claimed_at;
+    this.revoked_at = init.revoked_at;
     this.claim = init.claim;
     this.id_jag = init.id_jag;
   }
@@ -136,6 +139,12 @@ export class Registration {
    * column to keep in sync, no sweeper job needed to mark things expired.
    */
   get status(): "unclaimed" | "pending_claim" | "claimed" | "expired" {
+    /*
+     * A provider-pushed revocation (SET) severs the delegation this
+     * registration anchors. Check it before `claimed_at` so a claimed
+     * registration can't keep re-minting credentials after revocation.
+     */
+    if (this.revoked_at) return "expired";
     if (this.claimed_at) return "claimed";
     if (this.claim && this.claim.expires_at.getTime() < Date.now()) {
       return "expired";
@@ -323,19 +332,49 @@ export function findCredential(token: string): Credential | undefined {
   return c;
 }
 
+/**
+ * Provider-pushed revocation (RFC 8935 SET). Severs everything anchored to
+ * the `(iss, sub, aud)` delegation, not just the currently-outstanding
+ * access tokens: it revokes the credential rows, tears down the registration
+ * (marking it revoked and dropping its claim handle so neither the claim
+ * grant nor the jwt-bearer grant can re-mint), and deletes the delegation
+ * record. This upholds the documented contract in `AUTH.md` — the identity
+ * assertion, the registration, and every derived access token are all
+ * invalidated.
+ */
 export function revokeForDelegation(
   iss: string,
   sub: string,
   aud: string,
-): number {
-  let count = 0;
+): { credentials: number; registrations: number } {
+  let credentialCount = 0;
   for (const c of credentials.values()) {
     if (!c.revoked && c.iss === iss && c.sub === sub && c.aud === aud) {
       c.revoked = true;
-      count += 1;
+      credentialCount += 1;
     }
   }
-  return count;
+
+  const now = new Date();
+  let registrationCount = 0;
+  for (const r of registrations.values()) {
+    if (
+      r.id_jag &&
+      r.id_jag.iss === iss &&
+      r.id_jag.sub === sub &&
+      r.id_jag.aud === aud &&
+      !r.revoked_at
+    ) {
+      r.revoked_at = now;
+      /* Drop the claim handle so the surviving claim_token stops resolving. */
+      r.claim = undefined;
+      registrationCount += 1;
+    }
+  }
+
+  delegations.delete(delegationKey(iss, sub));
+
+  return { credentials: credentialCount, registrations: registrationCount };
 }
 
 export function revokeCredential(token: string): boolean {
@@ -481,6 +520,17 @@ export function findOrCreateIdJagRegistration(input: {
     if (existing) {
       existing.user_id = input.context.user.id;
       if (!existing.claimed_at) existing.claimed_at = now;
+      /*
+       * A prior provider SET may have revoked this binding. Reaching a
+       * clean match again means the delegation was legitimately
+       * re-established — matchOrProvision only returns a `user` context
+       * from a live delegation or JIT-provisioning, and getting here at
+       * all requires a fresh, non-replayable ID-JAG (verifyIdJag enforces
+       * jti-replay and auth_time freshness). Revive the registration so it
+       * isn't left in a revoked-but-"ready" limbo where the identity
+       * endpoint would sign an assertion for an "expired" registration.
+       */
+      existing.revoked_at = undefined;
       return { kind: "ready", registration: existing };
     }
     const registration = new Registration({
@@ -528,6 +578,19 @@ export function findOrCreateIdJagRegistration(input: {
      * Pending step-up exists — re-issue ceremony. Prior URL/code stop
      * working; the agent surfaces the new verification_uri to the user.
      */
+    if (existing.revoked_at) {
+      /*
+       * The binding was revoked by a provider SET, but a fresh,
+       * non-replayed ID-JAG (verifyIdJag enforces jti-replay and
+       * auth_time freshness) plus this confirmation ceremony is a
+       * legitimate re-authorization. Clear the revocation and the stale
+       * claimed_at so the registration drops back to a pending_claim
+       * state — it only becomes "claimed" again once the user completes
+       * the new ceremony, so no credential is issued before then.
+       */
+      existing.revoked_at = undefined;
+      existing.claimed_at = undefined;
+    }
     existing.claim = claim;
     return {
       kind: "step_up",
