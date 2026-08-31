@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,12 +25,20 @@ interface StoreFile {
 
 export class FileCredentialStore implements CredentialStore {
   private readonly filePath: string;
+  /** Serializes read-modify-write cycles within this process. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(filePath?: string) {
     this.filePath =
       filePath ??
       process.env.AUTHMD_STORE_PATH ??
       path.join(os.homedir(), ".authmd", "credentials.json");
+  }
+
+  private enqueue<T>(op: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(op, op);
+    this.queue = next.catch(() => undefined);
+    return next;
   }
 
   private async read(): Promise<StoreFile> {
@@ -46,7 +55,7 @@ export class FileCredentialStore implements CredentialStore {
       recursive: true,
       mode: 0o700,
     });
-    const tmp = `${this.filePath}.tmp`;
+    const tmp = `${this.filePath}.${crypto.randomBytes(6).toString("hex")}.tmp`;
     await fs.writeFile(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
     await fs.rename(tmp, this.filePath);
   }
@@ -57,15 +66,19 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   async set(issuer: string, record: IssuerRecord): Promise<void> {
-    const data = await this.read();
-    data.issuers[normalizeIssuer(issuer)] = record;
-    await this.write(data);
+    await this.enqueue(async () => {
+      const data = await this.read();
+      data.issuers[normalizeIssuer(issuer)] = record;
+      await this.write(data);
+    });
   }
 
   async delete(issuer: string): Promise<void> {
-    const data = await this.read();
-    delete data.issuers[normalizeIssuer(issuer)];
-    await this.write(data);
+    await this.enqueue(async () => {
+      const data = await this.read();
+      delete data.issuers[normalizeIssuer(issuer)];
+      await this.write(data);
+    });
   }
 }
 

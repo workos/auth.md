@@ -42,6 +42,19 @@ function str(args: Record<string, unknown>, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function strRecord(
+  args: Record<string, unknown>,
+  key: string,
+): Record<string, string> | undefined {
+  const value = args[key];
+  if (typeof value !== "object" || value === null) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === "string") out[k] = v;
+  }
+  return out;
+}
+
 export default function activate(pi: PiLike): void {
   const client = new AgentAuthClient();
 
@@ -128,6 +141,11 @@ export default function activate(pi: PiLike): void {
         },
         url: { type: "string", description: "Absolute URL to request" },
         method: { type: "string", description: "HTTP method (default GET)" },
+        headers: {
+          type: "object",
+          description: "Extra request headers",
+          additionalProperties: { type: "string" },
+        },
         body: { type: "string", description: "Request body" },
         resource: { type: "string", description: "RFC 8707 resource URI" },
       },
@@ -145,6 +163,7 @@ export default function activate(pi: PiLike): void {
             issuer,
             url,
             method: str(args, "method"),
+            headers: strRecord(args, "headers"),
             body: str(args, "body"),
             resource: str(args, "resource"),
           }),

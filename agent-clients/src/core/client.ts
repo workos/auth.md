@@ -5,7 +5,7 @@ import type {
   AuthenticateResult,
   ClaimAttemptResponse,
   ClaimCompleteResponse,
-  IdentityBlock,
+  IdentityType,
   IssuerRecord,
   ProtocolErrorBody,
   RegistrationResponse,
@@ -14,6 +14,7 @@ import type {
 import { ProtocolError } from "./types.js";
 
 const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+const ID_JAG_ASSERTION_TYPE = "urn:ietf:params:oauth:token-type:id-jag";
 
 /** Clock skew allowance when judging stored expiry timestamps. */
 const EXPIRY_SLACK_MS = 30 * 1000;
@@ -47,6 +48,7 @@ export interface FetchOptions {
 
 interface PendingClaim {
   registrationId: string;
+  registrationType: IdentityType;
   claimToken: string;
   claimUrl: string;
   verificationUri: string;
@@ -79,6 +81,15 @@ export class AgentAuthClient {
    */
   async authenticate(opts: AuthenticateOptions): Promise<AuthenticateResult> {
     const issuer = normalizeIssuer(opts.issuer);
+
+    // An email supplied against a live anonymous registration is an upgrade
+    // request: start the claim ceremony rather than reusing anonymous access.
+    if (opts.email && !opts.idJag && this.pendingClaims.has(issuer)) {
+      const record = await this.store.get(issuer);
+      if (record?.registration_type === "anonymous" && !record.claimed) {
+        return this.startClaimAttempt(issuer, opts.email);
+      }
+    }
 
     if (!opts.forceReregister) {
       const reused = await this.tryReuse(issuer, opts.resource);
@@ -117,7 +128,7 @@ export class AgentAuthClient {
         user_code: userCode,
       }),
     });
-    const body = await res.json();
+    const body = await readJson(res);
     if (!res.ok) {
       throw protocolError(res.status, body);
     }
@@ -126,11 +137,13 @@ export class AgentAuthClient {
 
     const record: IssuerRecord = {
       registration_id: completed.id,
-      registration_type: "service_auth",
+      registration_type: pending.registrationType,
       claimed: true,
       identity: completed.identity,
     };
-    await this.store.set(base, record);
+    // The post-claim assertion and refresh token are one-shot: a persistence
+    // failure must not prevent returning them to the caller.
+    await this.persistBestEffort(base, record);
     return this.exchange(base, record, resource);
   }
 
@@ -152,14 +165,33 @@ export class AgentAuthClient {
         401,
       );
     }
-    const res = await fetch(opts.url, {
-      method: opts.method ?? "GET",
-      headers: {
-        ...opts.headers,
-        Authorization: `Bearer ${auth.access_token}`,
-      },
-      body: opts.body,
-    });
+    const doFetch = (token: string) =>
+      fetch(opts.url, {
+        method: opts.method ?? "GET",
+        headers: {
+          ...opts.headers,
+          Authorization: `Bearer ${token}`,
+        },
+        body: opts.body,
+      });
+    let res = await doFetch(auth.access_token);
+
+    // A 401 against a cached token usually means it was revoked server-side:
+    // drop the cache and retry once with a freshly exchanged token.
+    if (res.status === 401) {
+      const record = await this.store.get(issuer);
+      if (record?.access_token) {
+        await this.store.set(issuer, { ...record, access_token: undefined });
+        const retried = await this.authenticate({
+          issuer,
+          resource: opts.resource,
+        });
+        if (retried.status === "ready") {
+          res = await doFetch(retried.access_token);
+        }
+      }
+    }
+
     const headers: Record<string, string> = {};
     res.headers.forEach((value, key) => {
       headers[key] = value;
@@ -175,7 +207,11 @@ export class AgentAuthClient {
     const record = await this.store.get(issuer);
     if (!record) return undefined;
 
-    if (record.access_token && isLive(record.access_token.expires_at)) {
+    if (
+      record.access_token &&
+      isLive(record.access_token.expires_at) &&
+      record.access_token.resource === resource
+    ) {
       return {
         status: "ready",
         access_token: record.access_token.value,
@@ -214,10 +250,11 @@ export class AgentAuthClient {
       body: JSON.stringify({ type: "refresh", refresh_token: refreshToken }),
     });
     if (!res.ok) return undefined;
-    const body = (await res.json()) as RegistrationResponse;
+    const body = (await readJson(res)) as RegistrationResponse;
     if (!body.identity) return undefined;
+    // The rotated refresh token is one-shot; don't lose it to a store failure.
     const updated: IssuerRecord = { ...record, identity: body.identity };
-    await this.store.set(issuer, updated);
+    await this.persistBestEffort(issuer, updated);
     return updated;
   }
 
@@ -228,12 +265,37 @@ export class AgentAuthClient {
     const metadata = await discover(issuer);
     const supported = metadata.agent_auth.identity_types_supported;
 
+    // A user-bound registration whose credentials have all expired must not
+    // silently degrade to a fresh anonymous identity.
+    if (!opts.email && !opts.idJag && !opts.forceReregister) {
+      const existing = await this.store.get(issuer);
+      if (existing && existing.registration_type !== "anonymous") {
+        throw new ProtocolError(
+          "reauthentication_required",
+          `Stored ${existing.registration_type} credentials for ${issuer} have expired. Re-authenticate with the original ${existing.registration_type === "service_auth" ? "email" : "ID-JAG"}, or pass forceReregister to start over anonymously.`,
+          401,
+        );
+      }
+    }
+
     let requestBody: Record<string, string>;
     let registrationType: IssuerRecord["registration_type"];
     if (opts.idJag) {
+      const assertionTypes =
+        metadata.agent_auth.identity_assertion?.assertion_types_supported ?? [];
+      if (
+        !supported.includes("identity_assertion") ||
+        !assertionTypes.includes(ID_JAG_ASSERTION_TYPE)
+      ) {
+        throw new ProtocolError(
+          "unsupported_identity_type",
+          `Service does not advertise identity_assertion with ${ID_JAG_ASSERTION_TYPE} (supported: [${supported.join(", ")}])`,
+          400,
+        );
+      }
       requestBody = {
         type: "identity_assertion",
-        assertion_type: "urn:ietf:params:oauth:token-type:id-jag",
+        assertion_type: ID_JAG_ASSERTION_TYPE,
         assertion: opts.idJag,
       };
       registrationType = "identity_assertion";
@@ -256,17 +318,17 @@ export class AgentAuthClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
     });
-    const body = (await res.json()) as RegistrationResponse;
+    const body = (await readJson(res)) as RegistrationResponse;
 
     if (res.status === 401 && body.error === "interaction_required") {
-      return this.stashClaim(issuer, body, opts.email);
+      return this.stashClaim(issuer, body, registrationType, opts.email);
     }
     if (!res.ok) {
       throw protocolError(res.status, body);
     }
 
     if (registrationType === "service_auth") {
-      return this.stashClaim(issuer, body, opts.email);
+      return this.stashClaim(issuer, body, registrationType, opts.email);
     }
 
     // anonymous and clean-match identity_assertion return an identity now
@@ -290,6 +352,7 @@ export class AgentAuthClient {
     if (registrationType === "anonymous" && body.claim) {
       this.pendingClaims.set(issuer, {
         registrationId: body.id,
+        registrationType,
         claimToken: body.claim.token,
         claimUrl: body.claim.url,
         verificationUri: body.claim.attempt?.verification_uri ?? "",
@@ -327,7 +390,7 @@ export class AgentAuthClient {
         login_hint: email,
       }),
     });
-    const body = await res.json();
+    const body = await readJson(res);
     if (!res.ok) {
       throw protocolError(res.status, body);
     }
@@ -341,6 +404,7 @@ export class AgentAuthClient {
   private stashClaim(
     issuer: string,
     body: RegistrationResponse,
+    registrationType: IdentityType,
     email?: string,
   ): AuthenticateResult {
     if (!body.claim?.attempt) {
@@ -352,6 +416,7 @@ export class AgentAuthClient {
     }
     const pending: PendingClaim = {
       registrationId: body.id,
+      registrationType,
       claimToken: body.claim.token,
       claimUrl: body.claim.url,
       verificationUri: body.claim.attempt.verification_uri,
@@ -398,7 +463,7 @@ export class AgentAuthClient {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: params.toString(),
     });
-    const body = await res.json();
+    const body = await readJson(res);
     if (!res.ok) {
       throw protocolError(res.status, body);
     }
@@ -412,9 +477,10 @@ export class AgentAuthClient {
           Date.now() + token.expires_in * 1000,
         ).toISOString(),
         scope: token.scope,
+        resource,
       },
     };
-    await this.store.set(issuer, updated);
+    await this.persistBestEffort(issuer, updated);
 
     return {
       status: "ready",
@@ -426,6 +492,38 @@ export class AgentAuthClient {
       registration_type: record.registration_type,
       claimed: record.claimed,
     };
+  }
+
+  /**
+   * Persist without letting a storage failure destroy one-shot credentials
+   * that the caller still needs returned.
+   */
+  private async persistBestEffort(
+    issuer: string,
+    record: IssuerRecord,
+  ): Promise<void> {
+    try {
+      await this.store.set(issuer, record);
+    } catch (err) {
+      console.error(
+        `authmd: failed to persist credentials for ${issuer}:`,
+        err,
+      );
+    }
+  }
+}
+
+/** Parse a JSON body, surfacing the HTTP status when the body is not JSON. */
+async function readJson(res: Response): Promise<unknown> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new ProtocolError(
+      "invalid_response",
+      `Non-JSON response (HTTP ${res.status})${text ? `: ${text.slice(0, 200)}` : ""}`,
+      res.status,
+    );
   }
 }
 

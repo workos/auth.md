@@ -95,6 +95,8 @@ export interface IssuerRecord {
     value: string;
     expires_at: string;
     scope?: string;
+    /** RFC 8707 resource the token was minted for, when one was requested. */
+    resource?: string;
   };
 }
 
