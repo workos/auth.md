@@ -269,10 +269,17 @@ export class AgentAuthClient {
     // silently degrade to a fresh anonymous identity.
     if (!opts.email && !opts.idJag && !opts.forceReregister) {
       const existing = await this.store.get(issuer);
-      if (existing && existing.registration_type !== "anonymous") {
+      if (
+        existing &&
+        (existing.claimed || existing.registration_type !== "anonymous")
+      ) {
+        const hint =
+          existing.registration_type === "identity_assertion"
+            ? "ID-JAG"
+            : "email";
         throw new ProtocolError(
           "reauthentication_required",
-          `Stored ${existing.registration_type} credentials for ${issuer} have expired. Re-authenticate with the original ${existing.registration_type === "service_auth" ? "email" : "ID-JAG"}, or pass forceReregister to start over anonymously.`,
+          `Stored ${existing.claimed ? "claimed" : existing.registration_type} credentials for ${issuer} have expired. Re-authenticate with the original ${hint}, or pass forceReregister to start over anonymously.`,
           401,
         );
       }

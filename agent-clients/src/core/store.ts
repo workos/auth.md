@@ -65,9 +65,17 @@ export class FileCredentialStore implements CredentialStore {
     for (;;) {
       try {
         const handle = await fs.open(lockPath, "wx", 0o600);
+        // Heartbeat: keep the lock's mtime fresh while held so other
+        // processes don't mistake a live (but slow) holder for a stale lock.
+        const heartbeat = setInterval(() => {
+          const now = new Date();
+          void fs.utimes(lockPath, now, now).catch(() => undefined);
+        }, LOCK_STALE_MS / 3);
+        heartbeat.unref();
         try {
           return await op();
         } finally {
+          clearInterval(heartbeat);
           await handle.close();
           await fs.unlink(lockPath).catch(() => undefined);
         }
