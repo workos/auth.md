@@ -14,7 +14,7 @@ import { ProtocolError } from "../core/types.js";
 const client = new AgentAuthClient();
 
 const server = new McpServer({
-  name: "authmd-agent-client",
+  name: "@workos/auth.md-client",
   version: "0.1.0",
 });
 

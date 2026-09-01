@@ -1,6 +1,6 @@
 {
   "manifest_version": "0.3",
-  "name": "authmd-agent-client",
+  "name": "auth.md-client",
   "display_name": "auth.md Agent Client",
   "version": "0.1.0",
   "description": "Agentic registration for services that support the auth.md protocol: authenticate, complete claim ceremonies, and make authenticated requests.",

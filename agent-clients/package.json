@@ -1,5 +1,5 @@
 {
-  "name": "authmd-agent-client",
+  "name": "@workos/auth.md-client",
   "version": "0.1.0",
   "description": "Agent-side client for the auth.md agentic registration protocol: shared core, MCP stdio server, and pi extension adapter.",
   "license": "MIT",

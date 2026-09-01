@@ -1,4 +1,4 @@
-# authmd-agent-client
+# @workos/auth.md-client
 
 The agent-side client for the [auth.md](../AUTH.md) agentic registration
 protocol. It collapses the full ceremony — discovery, registration, claim,
