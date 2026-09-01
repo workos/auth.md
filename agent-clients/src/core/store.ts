@@ -65,6 +65,7 @@ export class FileCredentialStore implements CredentialStore {
     for (;;) {
       try {
         const handle = await fs.open(lockPath, "wx", 0o600);
+        const ownIno = (await handle.stat()).ino;
         // Heartbeat: keep the lock's mtime fresh while held so other
         // processes don't mistake a live (but slow) holder for a stale lock.
         const heartbeat = setInterval(() => {
@@ -77,7 +78,13 @@ export class FileCredentialStore implements CredentialStore {
         } finally {
           clearInterval(heartbeat);
           await handle.close();
-          await fs.unlink(lockPath).catch(() => undefined);
+          // Only remove the lock if it is still ours: a holder that was
+          // suspended past LOCK_STALE_MS may have had its lock replaced,
+          // and must not unlink the new holder's lockfile.
+          const current = await fs.stat(lockPath).catch(() => undefined);
+          if (current?.ino === ownIno) {
+            await fs.unlink(lockPath).catch(() => undefined);
+          }
         }
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;

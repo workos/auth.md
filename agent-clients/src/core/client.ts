@@ -54,6 +54,8 @@ interface PendingClaim {
   verificationUri: string;
   attemptExpiresAt: string;
   email?: string;
+  /** RFC 8707 resource requested when the ceremony started. */
+  resource?: string;
 }
 
 /**
@@ -87,7 +89,7 @@ export class AgentAuthClient {
     if (opts.email && !opts.idJag && this.pendingClaims.has(issuer)) {
       const record = await this.store.get(issuer);
       if (record?.registration_type === "anonymous" && !record.claimed) {
-        return this.startClaimAttempt(issuer, opts.email);
+        return this.startClaimAttempt(issuer, opts.email, opts.resource);
       }
     }
 
@@ -144,7 +146,7 @@ export class AgentAuthClient {
     // The post-claim assertion and refresh token are one-shot: a persistence
     // failure must not prevent returning them to the caller.
     await this.persistBestEffort(base, record);
-    return this.exchange(base, record, resource);
+    return this.exchange(base, record, resource ?? pending.resource);
   }
 
   /**
@@ -328,14 +330,26 @@ export class AgentAuthClient {
     const body = (await readJson(res)) as RegistrationResponse;
 
     if (res.status === 401 && body.error === "interaction_required") {
-      return this.stashClaim(issuer, body, registrationType, opts.email);
+      return this.stashClaim(
+        issuer,
+        body,
+        registrationType,
+        opts.email,
+        opts.resource,
+      );
     }
     if (!res.ok) {
       throw protocolError(res.status, body);
     }
 
     if (registrationType === "service_auth") {
-      return this.stashClaim(issuer, body, registrationType, opts.email);
+      return this.stashClaim(
+        issuer,
+        body,
+        registrationType,
+        opts.email,
+        opts.resource,
+      );
     }
 
     // anonymous and clean-match identity_assertion return an identity now
@@ -365,6 +379,7 @@ export class AgentAuthClient {
         verificationUri: body.claim.attempt?.verification_uri ?? "",
         attemptExpiresAt:
           body.claim.attempt?.expires_at ?? body.claim.expires_at,
+        resource: opts.resource,
       });
     }
 
@@ -378,6 +393,7 @@ export class AgentAuthClient {
   async startClaimAttempt(
     issuer: string,
     email: string,
+    resource?: string,
   ): Promise<AuthenticateResult> {
     const base = normalizeIssuer(issuer);
     const pending = this.pendingClaims.get(base);
@@ -405,6 +421,7 @@ export class AgentAuthClient {
     pending.verificationUri = attempt.attempt.verification_uri;
     pending.attemptExpiresAt = attempt.attempt.expires_at;
     pending.email = email;
+    if (resource !== undefined) pending.resource = resource;
     return this.claimRequired(pending);
   }
 
@@ -413,6 +430,7 @@ export class AgentAuthClient {
     body: RegistrationResponse,
     registrationType: IdentityType,
     email?: string,
+    resource?: string,
   ): AuthenticateResult {
     if (!body.claim?.attempt) {
       throw new ProtocolError(
@@ -429,6 +447,7 @@ export class AgentAuthClient {
       verificationUri: body.claim.attempt.verification_uri,
       attemptExpiresAt: body.claim.attempt.expires_at,
       email,
+      resource,
     };
     this.pendingClaims.set(issuer, pending);
     return this.claimRequired(pending);

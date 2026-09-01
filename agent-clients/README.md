@@ -73,6 +73,17 @@ double-click the resulting `.mcpb`.
 pi: the adapter in `src/pi/` default-exports an `activate(pi)` that
 registers the same three tools via `pi.registerTool()`.
 
+Hermes ([hermes-agent](https://hermes-agent.nousresearch.com)): add the
+stdio server to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  authmd:
+    command: "node"
+    args: ["<repo>/agent-clients/dist/mcp/server.js"]
+    # or, once published: command: "npx", args: ["-y", "@workos/auth.md-client"]
+```
+
 ## Try it against the sample service
 
 ```sh
