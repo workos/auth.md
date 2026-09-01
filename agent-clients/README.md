@@ -39,6 +39,22 @@ a `0600` JSON file at `~/.authmd/credentials.json` (override with
 `AUTHMD_STORE_PATH`). The store is behind a `CredentialStore` interface so
 an OS-keychain backend can be swapped in without touching the client.
 
+## Trust model
+
+The client runs locally on the agent's machine, and tool inputs are trusted
+as the agent's own choices:
+
+- **`issuer` is trusted input.** Discovery fetches the issuer the caller
+  names, including `localhost` and private-network hosts (the sample
+  service runs on `localhost:8000`). If you embed the core where issuer
+  values can be influenced by untrusted prompts or content, enforce an
+  issuer allowlist in your adapter before calling the client.
+- **Tokens are agent credentials, not secrets from the agent.**
+  `authmd_authenticate` / `authmd_complete_claim` return the access token
+  plainly, and `authmd_fetch` sends it to the URL the caller supplies —
+  it's a convenience wrapper, not a security boundary. The credential file
+  exists for persistence/reuse across sessions, not to hide tokens.
+
 ## Install
 
 MCP hosts (after `pnpm build`, or via npm once published):
