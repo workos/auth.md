@@ -1,5 +1,30 @@
 # auth.md Changelog
 
+## v0.7.0 (2026-06-26)
+
+Reverses the v0.4.0 claim-ceremony direction to match the shipped service. The `user_code` is no longer minted by the agent for the user to type into a service page. Instead the agent hands the user a `verification_uri` only; the user signs in, the service's claim page reveals the `user_code`, and the user reads it back to the agent, which submits it to complete the claim. The agent no longer polls — completion is a direct call to `/agent/identity/claim/complete`. Also documents the `service_auth` refresh-token path (the spec previously stated there was no refresh token) and reshapes the registration/ceremony responses into the nested envelope the service emits.
+
+### Added
+
+- `POST /agent/identity/claim/complete` — the agent submits the `user_code` the user read back, plus its `claim_token`, and collects the post-claim identity (`identity.assertion` + a rotating `refresh_token`) as a one-shot response.
+- `refresh` registration type at `/agent/identity` — `{ "type": "refresh", "refresh_token": "…" }` exchanges a refresh token for a fresh `identity.assertion`, rotating the refresh token. Carried by `service_auth` and claimed-anonymous registrations.
+- `verification_uri` now embeds an opaque attempt token; the `user_code` is revealed only on the service's claim page, via a session-gated `/agent/identity/claim/view` the agent never calls.
+- Error codes for the direct-completion ceremony: `invalid_login_hint`, `claim_revoked`, `too_many_attempts`, `auth_method_disabled`, `claim_not_confirmed`, `invalid_user_code`, `user_code_expired`, `claim_denied`, `already_claimed`, `invalid_refresh_token`.
+
+### Changed
+
+- Claim ceremony direction: `user_code` travels service → user → agent (revealed in the browser), not agent → user.
+- `POST /agent/identity/claim` body: `{ claim_token, email }` → `{ type: "service_auth", claim_token, login_hint }`. `type` is the claim method — anonymous registrations are claimed via `service_auth` too — and the binding identifier follows CIBA's `login_hint`.
+- Registration and ceremony responses moved to a nested envelope: `registration_id`/`registration_type` → `id`/`type`; `identity_assertion`/`assertion_expires` → `identity.{assertion,expires_at}`; `claim_token`/`claim_token_expires`/`claim_url` → `claim.{token,expires_at,url}`; flat `pre_claim_scopes`/`post_claim_scopes` → `scopes.{pre_claim,post_claim}`; `verification_uri` → `claim.attempt.verification_uri`.
+- Refresh model: `service_auth` (and claimed anonymous) registrations carry a rotating `refresh_token`; anonymous (pre-claim) and `identity_assertion` still re-exchange the assertion or re-register.
+- Error codes renamed to match the service: `anonymous_not_enabled` → `anonymous_registration_disabled`, `service_auth_not_enabled` → `service_auth_registration_disabled`, `claimed_or_in_flight` → `already_claimed`, `rate_limited` → `rate_limit_exceeded`.
+
+### Removed
+
+- `urn:workos:agent-auth:grant-type:claim` polling grant at `/oauth2/token`, and its `authorization_pending` / `expired_token` / `slow_down` response vocabulary. Completion is the direct `/agent/identity/claim/complete` call.
+- `user_code`, `expires_in`, and `interval` from all agent-facing registration and claim responses — the code is shown on the claim page, and there is no polling interval to honor.
+- The claim grant from `grant_types_supported` (now just `urn:ietf:params:oauth:grant-type:jwt-bearer`).
+
 ## v0.6.0 (2026-06-10)
 
 Splits the email-based registration path out from `identity_assertion` and into a top-level `service_auth` registration type, with a body modeled on [OIDC CIBA](https://openid.net/specs/openid-client-initiated-backchannel-authentication-core-1_0.html)'s `login_hint`. The previous shape was honest about how it worked — the service was verifying the email, not the agent — but it was filed under `identity_assertion` like the agent was asserting something. CIBA's vocabulary fits: the agent is hinting at who the user is, and the service authenticates the user out-of-band.
