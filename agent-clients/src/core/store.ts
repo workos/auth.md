@@ -18,6 +18,14 @@ export interface CredentialStore {
   delete(issuer: string): Promise<void>;
 }
 
+const LOCK_RETRY_MS = 50;
+const LOCK_TIMEOUT_MS = 10 * 1000;
+const LOCK_STALE_MS = 30 * 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 interface StoreFile {
   version: 1;
   issuers: Record<string, IssuerRecord>;
@@ -39,6 +47,45 @@ export class FileCredentialStore implements CredentialStore {
     const next = this.queue.then(op, op);
     this.queue = next.catch(() => undefined);
     return next;
+  }
+
+  /**
+   * Cross-process advisory lock: an exclusively created lockfile guards the
+   * read-modify-write cycle so concurrent host processes (e.g. Claude and
+   * Codex sharing ~/.authmd) can't discard each other's updates. Locks older
+   * than LOCK_STALE_MS are treated as abandoned by a crashed process.
+   */
+  private async withLock<T>(op: () => Promise<T>): Promise<T> {
+    const lockPath = `${this.filePath}.lock`;
+    await fs.mkdir(path.dirname(this.filePath), {
+      recursive: true,
+      mode: 0o700,
+    });
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    for (;;) {
+      try {
+        const handle = await fs.open(lockPath, "wx", 0o600);
+        try {
+          return await op();
+        } finally {
+          await handle.close();
+          await fs.unlink(lockPath).catch(() => undefined);
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        const stat = await fs.stat(lockPath).catch(() => undefined);
+        if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          await fs.unlink(lockPath).catch(() => undefined);
+          continue;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(
+            `Timed out waiting for credential store lock at ${lockPath}`,
+          );
+        }
+        await sleep(LOCK_RETRY_MS);
+      }
+    }
   }
 
   private async read(): Promise<StoreFile> {
@@ -66,19 +113,23 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   async set(issuer: string, record: IssuerRecord): Promise<void> {
-    await this.enqueue(async () => {
-      const data = await this.read();
-      data.issuers[normalizeIssuer(issuer)] = record;
-      await this.write(data);
-    });
+    await this.enqueue(() =>
+      this.withLock(async () => {
+        const data = await this.read();
+        data.issuers[normalizeIssuer(issuer)] = record;
+        await this.write(data);
+      }),
+    );
   }
 
   async delete(issuer: string): Promise<void> {
-    await this.enqueue(async () => {
-      const data = await this.read();
-      delete data.issuers[normalizeIssuer(issuer)];
-      await this.write(data);
-    });
+    await this.enqueue(() =>
+      this.withLock(async () => {
+        const data = await this.read();
+        delete data.issuers[normalizeIssuer(issuer)];
+        await this.write(data);
+      }),
+    );
   }
 }
 
