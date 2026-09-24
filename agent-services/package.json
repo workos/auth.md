@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p .",
+    "build": "tsc -p . && cp -R src/views dist/views && cp -R src/public dist/public",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "ejs": "^6.0.1",
     "express": "^4.21.2",
     "express-session": "^1.19.0",
     "jose": "^5.9.6",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
+    "@types/ejs": "^3.1.5",
     "@types/express": "^4.17.21",
     "@types/express-session": "^1.19.0",
     "@types/node": "^22.10.0",

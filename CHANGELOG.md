@@ -1,5 +1,9 @@
 # auth.md Changelog
 
+## v0.6.1 (2026-06-12)
+
+No protocol changes. Service-side view layer migrated from inline-HTML template literals to EJS.
+
 ## v0.6.0 (2026-06-10)
 
 Splits the email-based registration path out from `identity_assertion` and into a top-level `service_auth` registration type, with a body modeled on [OIDC CIBA](https://openid.net/specs/openid-client-initiated-backchannel-authentication-core-1_0.html)'s `login_hint`. The previous shape was honest about how it worked — the service was verifying the email, not the agent — but it was filed under `identity_assertion` like the agent was asserting something. CIBA's vocabulary fits: the agent is hinting at who the user is, and the service authenticates the user out-of-band.

@@ -1,6 +1,8 @@
 import cors from "cors";
 import express from "express";
 import session from "express-session";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { initKeys } from "./keys.js";
 import { agentAuthRouter } from "./routes/agent-auth.js";
@@ -31,6 +33,10 @@ async function main() {
   await initKeys();
 
   const app = express();
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  app.set("view engine", "ejs");
+  app.set("views", path.join(__dirname, "views"));
+  app.use(express.static(path.join(__dirname, "public")));
   app.use(cors({ origin: config.corsOrigins }));
   app.use(express.json());
   /*
