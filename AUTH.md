@@ -97,6 +97,7 @@ The outer fields restate the PRM. The top-level OAuth endpoints (`issuer`, `toke
 - `agent_auth.events_endpoint` — where the provider POSTs a [Security Event Token (RFC 8417)](https://datatracker.ietf.org/doc/html/rfc8417) per [RFC 8935](https://datatracker.ietf.org/doc/html/rfc8935) push delivery to notify the service of upstream identity events. You don't call this; it tells you what to expect.
 - `agent_auth.identity_types_supported` — which registration methods this service accepts. Pick yours from Step 2.
 - `agent_auth.identity_assertion.assertion_types_supported` — which assertion types this service accepts under the `identity_assertion` shape (currently ID-JAG).
+- `agent_auth.did_key` — present only if `identity_types_supported` includes `did_key`. `challenge_endpoint` is where you fetch a single-use challenge, and `credential_types_supported` lists what registration gives you: `identity_assertion` (the usual Step 5 exchange) and/or `signed_request` (no token at all; you sign every API call with your key). See [did_key](#did_key).
 - `agent_auth.events_supported` — event schemas this service can ingest (currently revocation). Informational; you don't act on these directly.
 
 ## Step 2 — Pick a method
@@ -105,7 +106,8 @@ Use this decision tree:
 
 1. **You have a session tied to a user identity and can exchange it for an ID-JAG, audience-bound to this service** → [identity_assertion + id-jag](#identity_assertion--id-jag).
 2. **You have only the user's email** → [service_auth](#service_auth). Claim ceremony required.
-3. **You have neither** → [anonymous](#anonymous). Claim ceremony optional; deferred until the user wants to take ownership.
+3. **You hold an Ed25519 `did:key` and the service lists `did_key` in `identity_types_supported`** → [did_key](#did_key). This proves who you are without a provider or a user. Use it only when the service advertises it: the challenge endpoint is discovery-only.
+4. **You have none of these** → [anonymous](#anonymous). Claim ceremony optional; deferred until the user wants to take ownership.
 
 For `identity_assertion`, check that your assertion type is in `agent_auth.identity_assertion.assertion_types_supported`, if not listed then stop. For `service_auth` and `anonymous`, `identity_types_supported` is informational — send the body and fall back on the `*_not_enabled` error if the service opted out.
 
@@ -253,6 +255,80 @@ Response (200):
 ```
 
 The `identity_assertion` exchanges at `/oauth2/token` for an access_token with `pre_claim_scopes` immediately. If you also want a human to take ownership and unlock `post_claim_scopes`, go to [Step 4](#step-4--claim-ceremony). Otherwise skip to [Step 5](#step-5--exchange-the-assertion). `claim_token` is returned exactly once — hold it in memory for the duration of the ceremony; do not persist it past Step 4.
+
+### did_key
+
+For agents whose identity is an Ed25519 key, published as a [`did:key`](https://w3c-ccg.github.io/did-method-key/). The DID already contains the public key, so the service verifies proof of possession locally. There is no provider, no JWKS fetch and no DID resolution.
+
+Discovery, inside `agent_auth`:
+
+```json
+"identity_types_supported": ["anonymous", "did_key"],
+"did_key": {
+  "challenge_endpoint": "https://auth.service.example.com/agent/identity/challenge",
+  "credential_types_supported": ["identity_assertion", "signed_request"],
+  "request_signing": "https://docs.service.example.com/request-signing"
+}
+```
+
+**1. Get a challenge.**
+
+```http
+POST /agent/identity/challenge
+```
+
+```json
+{
+  "challenge": "<base64url, ≥ 32 random bytes>",
+  "expires_at": "2026-05-04T12:01:00.000Z"
+}
+```
+
+The challenge is single-use and short-lived (60 s recommended, 300 s max).
+
+**2. Sign and register.** Sign this exact UTF-8 string with your Ed25519 key:
+
+```
+auth.md did_key v1
+<issuer from AS metadata>
+<challenge>
+```
+
+The issuer line binds the proof to this service. Without it, a malicious service could forward its own challenge from a real service, have you sign it, and register at the real service as you.
+
+```http
+POST /agent/identity
+Content-Type: application/json
+
+{
+  "type": "did_key",
+  "did": "did:key:z6Mk...",
+  "challenge": "<challenge>",
+  "signature": "<base64url Ed25519 signature, 64 bytes>",
+  "credential_type": "identity_assertion"
+}
+```
+
+The service checks four things. The challenge must exist, be unexpired and not yet redeemed; it is invalidated whether or not verification succeeds. The DID must be a `did:key` with the Ed25519 multicodec prefix (`0xed01`). The signature must verify over the string above, using the service's own issuer. `credential_type` must be one the service advertised. Re-registering an active DID returns the same registration, so the DID is a stable identity across sessions. A revoked DID is rejected with `did_key_revoked`; it does not get a new registration.
+
+**Response, `credential_type: "identity_assertion"`:** the same shape as the [anonymous](#anonymous) response, with `"registration_type": "did_key"` and `"did"`. The identity assertion's `sub` is the DID. Exchange it at [Step 5](#step-5--exchange-the-assertion). Claim is optional, exactly as for anonymous. A claim binds the DID to a user account, so later registrations with that DID start at `post_claim_scopes`.
+
+**Response, `credential_type: "signed_request"`:**
+
+```json
+{
+  "registration_id": "reg_...",
+  "registration_type": "did_key",
+  "did": "did:key:z6Mk...",
+  "credential_type": "signed_request",
+  "scopes": ["api.read", "api.write"],
+  "request_signing": "https://docs.service.example.com/request-signing"
+}
+```
+
+No token is issued. Your key is the credential: sign each API call exactly as the `request_signing` document specifies. A service offering `signed_request` MUST publish that document as a complete profile: the signature scheme (for example [RFC 9421 HTTP Message Signatures](https://datatracker.ietf.org/doc/html/rfc9421)), how the request names the signing DID, which request components are covered, and the replay rules (timestamp window, nonce or idempotency key). There is no implicit default; if `request_signing` is missing, do not use `signed_request`. Skip Steps 4–6. A service that already authenticates every request this way can offer it without running an OAuth token endpoint at all; it still publishes the PRM and AS metadata so agents can discover it.
+
+Scopes are always the service's decision. `did_key` proves which key is calling, not what it is allowed to do.
 
 ## Step 4 — Claim ceremony
 
@@ -411,6 +487,9 @@ Errors at `/agent/identity` and `/agent/identity/claim/*` use profile-specific c
 | ---------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `anonymous_not_enabled`      | `/agent/identity`             | This service doesn't accept anonymous. Pick another method from Step 2.                                                                                                                |
 | `service_auth_not_enabled`   | `/agent/identity`             | service_auth (email-based) disabled here. Pick another method.                                                                                                                         |
+| `did_key_not_enabled`        | `/agent/identity`             | This service doesn't accept did_key, or not with the requested `credential_type`. Pick another method or credential type.                                                              |
+| `did_key_revoked`            | `/agent/identity` (did_key)   | This DID's registration was revoked. Don't retry with the same key; register a new DID if the service allows it.                                                                      |
+| `invalid_challenge`          | `/agent/identity` (did_key)   | Challenge unknown, expired or already used. Fetch a new one from `challenge_endpoint` and sign again.                                                                                  |
 | `issuer_not_enabled`         | `/agent/identity`             | Provider not on this service's trust list. Pick another method.                                                                                                                        |
 | `invalid_request`            | `/agent/identity`             | Body shape, missing claims, ID-JAG signature/`jti`/`aud` problems, or unverified identity. Fix the input (mint a fresh ID-JAG if signature/`jti`/`aud`/`exp`-related).                 |
 | `interaction_required` (401) | `/agent/identity` (ID-JAG)    | Step-up: ID-JAG matched an existing account but no `(iss, sub)` delegation yet. Body carries a `claim` block; surface it to the user (see [Step 4](#step-4--claim-ceremony)).          |
@@ -440,5 +519,7 @@ Two independent layers can kill what you're holding:
 
 - **Credential layer ([RFC 7009](https://datatracker.ietf.org/doc/html/rfc7009), `revocation_endpoint`)** — agent-callable. POST `token=<access_token>&token_type_hint=access_token` (form-encoded) to the top-level `revocation_endpoint` to kill one access_token. 200 on success, idempotent. Your `identity_assertion` is intact; re-run [Step 5](#step-5--exchange-the-assertion) to mint a fresh access_token.
 - **Registration layer ([RFC 8935](https://datatracker.ietf.org/doc/html/rfc8935) Security Event Token delivery, `agent_auth.events_endpoint`)** — provider-driven. The provider that minted your ID-JAG can POST a [SET (RFC 8417)](https://datatracker.ietf.org/doc/html/rfc8417) (`Content-Type: application/secevent+jwt`) to this service's `events_endpoint`. The service invalidates the identity assertion and every access_token derived from it. You don't call this; you discover it the next time `/oauth2/token` returns `invalid_grant` — restart at [Step 3](#step-3--register).
+
+- **did_key registrations** — the service can revoke a DID's registration at any time. Revocation is permanent for that DID and also invalidates its identity assertion and every access_token derived from it. You find out at Step 5 (`invalid_grant`) or, for `signed_request`, from a 401 on a signed call; re-registering then returns `did_key_revoked`. If your key may be compromised, stop using it and register a new DID; a DID cannot be rotated.
 
 On a 401 for a previously-working access_token: try [Step 5](#step-5--exchange-the-assertion) once. If `/oauth2/token` succeeds, the credential was revoked at the credential layer and your fresh access_token works. If `/oauth2/token` returns `invalid_grant`, the registration was killed at the registration layer — restart at [Step 3](#step-3--register).
