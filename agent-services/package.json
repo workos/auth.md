@@ -15,7 +15,7 @@
     "express-session": "^1.19.0",
     "jose": "^5.9.6",
     "shared": "workspace:*",
-    "zod": "^4.3.6"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
