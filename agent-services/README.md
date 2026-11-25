@@ -4,11 +4,11 @@ Services that want agents to authenticate on behalf of users — via Identity As
 
 This guide covers three flows:
 
-1. **ID-JAG identity assertion** — trusted agent providers (OpenAI, Anthropic, Cursor, etc.) assert a user's identity with an ID-JAG. The service verifies the assertion and returns a service-signed identity_assertion the agent exchanges at the token endpoint for an access_token.
-2. **Verified-email identity assertion** — the agent gives us a user email; the service mints a 6-digit `user_code` and returns it to the agent, the agent surfaces it to the user, the user signs in on a service page and types the code to authorize the agent.
-3. **Anonymous registration** — an agent with no user identity self-registers for a pre-claim identity_assertion and optionally invites a human to take ownership later via the same code-handoff ceremony.
+1. **ID-JAG identity assertion** — trusted agent providers (OpenAI, Anthropic, Cursor, etc.) assert a user's identity with an ID-JAG. The service verifies the assertion and returns a service-signed identity assertion the agent exchanges at the token endpoint for an access_token.
+2. **service_auth (email-based claim)** — the agent gives us a user email as a `login_hint`; the service hands the agent a `verification_uri` (no code), the agent hands it to the user, the user signs in on a service page and confirms, and the page reveals a 6-digit `user_code` the user reads back to the agent. The agent submits that code to finish.
+3. **Anonymous registration** — an agent with no user identity self-registers for a pre-claim identity assertion and optionally invites a human to take ownership later via the same claim ceremony.
 
-All three flows share the same `/agent/identity` registration endpoint and terminate at `/oauth2/token` (RFC 7523 JWT-bearer) for credential issuance. Verified-email and anonymous flows additionally use the [RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628) device-authorization-shaped claim ceremony.
+All three flows share the same `/agent/identity` registration endpoint and terminate at `/oauth2/token` (RFC 7523 JWT-bearer) for credential issuance. service_auth and anonymous flows additionally use the claim ceremony, whose ceremony fields borrow their shape from [RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628) device authorization — but the `user_code` travels service → user → agent (revealed on the service's page, read back to the agent), and the agent completes at `/agent/identity/claim/complete` rather than polling.
 
 **Why adopt this.** ID-JAG is a near-drop-in if your service already JIT-provisions users via OIDC or SAML — it's standard JWT verification against a provider JWKS plus a delegation record per `(iss, sub, aud)`, with no user-model changes. The claim flows are a real extension (a pre-claim principal state, a claim state machine, a scope-set swap) but they unlock MCP-server agents that start with no user identity — a use case nothing else handles cleanly. All three flows give users a real revoke surface for agent delegations, instead of copy-pasted API keys the service has no visibility into.
 
@@ -41,7 +41,7 @@ sequenceDiagram
     Service->>Provider: GET /.well-known/jwks.json
     Provider-->>Service: 200 OK (JSON Web Key Set)
     Service->>Service: Verify signature + claims, match user
-    Service-->>Agent: 200 OK (identity_assertion)
+    Service-->>Agent: 200 OK (identity.assertion)
 
     Agent->>Service: POST /oauth2/token<br/>grant_type=jwt-bearer&assertion=...
     Service-->>Agent: 200 OK (access_token)
@@ -56,27 +56,25 @@ sequenceDiagram
     participant Service
 
     Agent->>Service: POST /agent/identity<br/>{ type: anonymous }
-    Service-->>Agent: 200 OK (identity_assertion, claim_token)
+    Service-->>Agent: 200 OK (identity.assertion, claim.token)
     Agent->>Service: POST /oauth2/token<br/>grant_type=jwt-bearer&assertion=...
     Service-->>Agent: 200 OK (access_token, pre-claim scope)
 
     Note over Agent: Agent operates with pre-claim scopes
 
     User-->>Agent: Wants to take ownership
-    Agent->>Service: POST /agent/identity/claim<br/>{ claim_token, email }
-    Service-->>Agent: 200 OK (claim_attempt: user_code, verification_uri)
-    Agent-->>User: Surface user_code + verification_uri
+    Agent->>Service: POST /agent/identity/claim<br/>{ type: service_auth, claim_token, login_hint }
+    Service-->>Agent: 200 OK (attempt.verification_uri)
+    Agent-->>User: Surface verification_uri (no code)
     User->>Service: GET verification_uri (signs in, lands on /claim)
-    User->>Service: POST /agent/identity/claim/complete<br/>{ claim_attempt_token, user_code }
-    Service-->>User: 200 OK (claim page confirms)
-
-    loop until claimed
-      Agent->>Service: POST /oauth2/token<br/>grant_type=urn:workos:agent-auth:grant-type:claim&claim_token=...
-      Service-->>Agent: 200 OK (post-claim access_token + v2 identity_assertion) | authorization_pending
-    end
+    User->>Service: POST /claim/confirm (confirms)
+    Service-->>User: Reveals user_code on the page
+    User-->>Agent: Reads user_code back
+    Agent->>Service: POST /agent/identity/claim/complete<br/>{ claim_token, user_code }
+    Service-->>Agent: 200 OK (post-claim identity.assertion + refresh_token)
 ```
 
-### Verified-Email Identity Assertion
+### Service Auth (Email-Based Claim)
 
 ```mermaid
 sequenceDiagram
@@ -85,16 +83,14 @@ sequenceDiagram
     participant Service
 
     Agent->>Service: POST /agent/identity<br/>{ type: service_auth, login_hint: email }
-    Service-->>Agent: 200 OK (claim_token, claim: user_code, verification_uri)
-    Agent-->>User: Surface user_code + verification_uri
+    Service-->>Agent: 200 OK (claim.token, claim.attempt.verification_uri)
+    Agent-->>User: Surface verification_uri (no code)
     User->>Service: GET verification_uri (signs in as asserted email, lands on /claim)
-    User->>Service: POST /agent/identity/claim/complete<br/>{ claim_attempt_token, user_code }
-    Service-->>User: 200 OK (claim page confirms)
-
-    loop until claimed
-      Agent->>Service: POST /oauth2/token<br/>grant_type=urn:workos:agent-auth:grant-type:claim&claim_token=...
-      Service-->>Agent: 200 OK (access_token + identity_assertion) | authorization_pending
-    end
+    User->>Service: POST /claim/confirm (confirms)
+    Service-->>User: Reveals user_code on the page
+    User-->>Agent: Reads user_code back
+    Agent->>Service: POST /agent/identity/claim/complete<br/>{ claim_token, user_code }
+    Service-->>Agent: 200 OK (identity.assertion + refresh_token)
 ```
 
 ## Minimum Consumer Implementation
@@ -143,21 +139,20 @@ AS metadata:
   "issuer": "https://auth.service.example.com",
   "token_endpoint": "https://auth.service.example.com/oauth2/token",
   "revocation_endpoint": "https://auth.service.example.com/oauth2/revoke",
-  "grant_types_supported": [
-    "urn:ietf:params:oauth:grant-type:jwt-bearer",
-    "urn:workos:agent-auth:grant-type:claim"
-  ],
+  "grant_types_supported": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
 
   "agent_auth": {
     "skill": "https://service.example.com/auth.md",
     "identity_endpoint": "https://auth.service.example.com/agent/identity",
     "claim_endpoint": "https://auth.service.example.com/agent/identity/claim",
     "events_endpoint": "https://auth.service.example.com/agent/event/notify",
-    "identity_types_supported": ["anonymous", "identity_assertion", "service_auth"],
+    "identity_types_supported": [
+      "anonymous",
+      "identity_assertion",
+      "service_auth"
+    ],
     "identity_assertion": {
-      "assertion_types_supported": [
-        "urn:ietf:params:oauth:token-type:id-jag"
-      ]
+      "assertion_types_supported": ["urn:ietf:params:oauth:token-type:id-jag"]
     },
     "events_supported": [
       "https://schemas.workos.com/events/agent/auth/identity/assertion/revoked"
@@ -168,7 +163,7 @@ AS metadata:
 
 Top-level `issuer` / `token_endpoint` / `revocation_endpoint` / `grant_types_supported` follow [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) (with `revocation_endpoint` per [RFC 7009](https://datatracker.ietf.org/doc/html/rfc7009)). The `agent_auth` block is a profile extension for the agent-auth–specific surface: the registration endpoint, the claim ceremony, and the [RFC 8935](https://datatracker.ietf.org/doc/html/rfc8935) SET receiver.
 
-Advertise the identity types and assertion types your service accepts. Anonymous is the simplest if you only support self-registration; ID-JAG is for trusted-provider integrations; the verified email assertion type is for agents that have a user email but no provider-signed assertion.
+Advertise the identity types and assertion types your service accepts. Anonymous is the simplest if you only support self-registration; ID-JAG is for trusted-provider integrations; service_auth is for agents that have a user email but no provider-signed assertion. The claim ceremony is not a `/oauth2/token` grant, so `grant_types_supported` lists only the JWT-bearer exchange.
 
 On any 401 from your API, include the discovery hint:
 
@@ -209,21 +204,23 @@ Implementation steps:
 4. **Verify the signature** using the key matching `kid`.
 5. **Validate claims:** `aud` matches your auth server; `exp` is future; `iat` is not unreasonably future; `jti` has not been seen recently; `client_id` resolves to a known provider identity; at least one of `email_verified` or `phone_number_verified` is `true`; **`auth_time` is present and within `idJagMaxAuthAgeSeconds`** (see [auth_time freshness](#auth_time-freshness) below).
 6. **Match or provision the user** (see [User Matching and JIT Provisioning](#user-matching-and-jit-provisioning)). If the match resolves to an existing user via email/phone but no `(iss, sub)` delegation exists yet, step up (see [First-link step-up](#first-link-step-up) below) — do **not** silently bind.
-7. **Mint a service-signed identity_assertion** (typed `oauth-id-jag+jwt`, signed by your AS key, with `sub` = the registration ID). This is what the agent will exchange at `/oauth2/token`.
+7. **Mint a service-signed identity assertion** (typed `oauth-id-jag+jwt`, signed by your AS key, with `sub` = the registration ID). This is what the agent will exchange at `/oauth2/token`.
 
 Clean-match response:
 
 ```json
 {
-  "registration_id": "reg_...",
-  "registration_type": "identity_assertion",
-  "identity_assertion": "<service-signed JWT>",
-  "assertion_expires": "2026-05-04T13:00:00.000Z",
+  "id": "reg_...",
+  "type": "identity_assertion",
+  "identity": {
+    "assertion": "<service-signed JWT>",
+    "expires_at": "2026-05-04T13:00:00.000Z"
+  },
   "scopes": ["api.read", "api.write"]
 }
 ```
 
-The agent then POSTs the `identity_assertion` to [`/oauth2/token`](#post-oauth2token) to obtain an access_token. No credential is issued at `/agent/identity` itself.
+The agent then POSTs `identity.assertion` to [`/oauth2/token`](#post-oauth2token) to obtain an access_token. No credential is issued at `/agent/identity` itself.
 
 Error response (400 except where noted):
 
@@ -259,28 +256,28 @@ WWW-Authenticate: AgentAuth error="interaction_required", error_description="...
 {
   "error": "interaction_required",
   "error_description": "...",
-  "registration_id": "reg_...",
-  "registration_type": "identity_assertion",
-  "claim_url": "/agent/identity/claim",
-  "claim_token": "clm_...",
-  "claim_token_expires": "...",
-  "post_claim_scopes": ["api.read", "api.write"],
+  "id": "reg_...",
+  "type": "identity_assertion",
+  "scopes": { "post_claim": ["api.read", "api.write"] },
   "claim": {
-    "user_code": "123456",
-    "expires_in": 600,
-    "verification_uri": "...",
-    "interval": 5
+    "token": "clm_...",
+    "expires_at": "...",
+    "url": "/agent/identity/claim",
+    "attempt": {
+      "verification_uri": "...",
+      "expires_at": "..."
+    }
   }
 }
 ```
 
-The `claim` block is the same shape as the verified-email and anonymous flows ([Claim Ceremony](#claim-ceremony)). The user-facing `/claim` page renders provider-aware copy for ID-JAG registrations ("**Acme** is asking to link this account…") — the provider display name comes from your trust list. After completion, the agent's next poll picks up the bound delegation. The same `(iss, sub, aud)` triple is keyed on a single registration row whether pending or bound, so repeat presentations during step-up reuse the row and re-issue a fresh ceremony.
+The `claim` block is the same shape as the service_auth and anonymous flows ([Claim Ceremony](#claim-ceremony)). The user-facing `/claim` page renders provider-aware copy for ID-JAG registrations ("**Acme** is asking to link this account…") — the provider display name comes from your trust list. After the user confirms and reads the `user_code` back, the agent submits it at `/agent/identity/claim/complete` to bind the delegation. The same `(iss, sub, aud)` triple is keyed on a single registration row whether pending or bound, so repeat presentations during step-up reuse the row and re-issue a fresh ceremony.
 
 **Why step up.** Without it, any trusted provider could mint an ID-JAG with `email_verified: true` for `victim@example.com` and silently take over that user's account at your service. Step-up gates the binding on the user being signed in at your service — their authenticated session is what authorizes the link.
 
 In production, services often source provider display names from CIMD ([Client ID Metadata Document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/)) instead of maintaining them by hand — the provider hosts a metadata document at a stable URL and the service fetches it. Either way, the service decides what `/claim` renders; never render a `client_name` value the provider sets directly, since a malicious provider would pick its own marketing copy.
 
-**The claim ceremony is your primary place to enforce authorization policies.** The agent never authenticates the user; the agent presents an ID-JAG (which the provider authenticated, on the provider's terms) and the service authenticates the user via its existing `/login` flow during the ceremony. Whatever conditions you normally enforce in interactive browser sign-in — enterprise SSO, MFA, bot detection, terms re-acceptance, just-in-time provisioning checks — apply here, with no agent-auth-specific exceptions. If `acme.com` is enterprise-SSO-managed in your tenant, an ID-JAG asserting `alice@acme.com` from a provider Acme should land the user on a sign-in surface that refuses to complete until Alice authenticates through Acme's IdP. The agent polls until the user finishes; from the agent's perspective the flow is identical whether the gate is "no gate," "MFA," or "full enterprise SSO." This is how ID-JAGs don't bypass your domain-bound policies.
+**The claim ceremony is your primary place to enforce authorization policies.** The agent never authenticates the user; the agent presents an ID-JAG (which the provider authenticated, on the provider's terms) and the service authenticates the user via its existing `/login` flow during the ceremony. Whatever conditions you normally enforce in interactive browser sign-in — enterprise SSO, MFA, bot detection, terms re-acceptance, just-in-time provisioning checks — apply here, with no agent-auth-specific exceptions. If `acme.com` is enterprise-SSO-managed in your tenant, an ID-JAG asserting `alice@acme.com` from a provider Acme should land the user on a sign-in surface that refuses to complete until Alice authenticates through Acme's IdP. The agent waits for the user to finish and read back the code; from the agent's perspective the flow is identical whether the gate is "no gate," "MFA," or "full enterprise SSO." This is how ID-JAGs don't bypass your domain-bound policies.
 
 #### type: anonymous
 
@@ -295,26 +292,32 @@ Implementation steps:
 1. Apply rate limits (see [Rate Limiting](#rate-limiting)).
 2. Create the registration. The principal it eventually binds to is up to the service — it might be a user, workspace, account, tenant, or organization. Flag it as agent-created so downstream events and UI can distinguish it.
 3. Generate a claim token (prefixed, high-entropy — e.g., `clm_` + 25 chars base62). Store only its SHA-256 hash. Return the plaintext exactly once.
-4. Mint a service-signed `identity_assertion` bound to the registration. At `/oauth2/token` exchange time, unclaimed anonymous registrations get the pre-claim scope set.
+4. Mint a service-signed identity assertion bound to the registration. At `/oauth2/token` exchange time, unclaimed anonymous registrations get the pre-claim scope set.
 5. Schedule an expiration job at the registration's TTL to mark the claim expired.
 
 Successful response:
 
 ```json
 {
-  "registration_id": "reg_01ABC123DEF456GHI789JKL0MN",
-  "registration_type": "anonymous",
-  "identity_assertion": "<service-signed JWT>",
-  "assertion_expires": "2026-05-04T13:00:00.000Z",
-  "pre_claim_scopes": ["api.read"],
-  "claim_url": "/agent/identity/claim",
-  "claim_token": "clm_abc123def456ghi789jkl012mno",
-  "claim_token_expires": "2026-04-22T12:34:56.789Z",
-  "post_claim_scopes": ["api.read", "api.write"]
+  "id": "reg_01ABC123DEF456GHI789JKL0MN",
+  "type": "anonymous",
+  "identity": {
+    "assertion": "<service-signed JWT>",
+    "expires_at": "2026-05-04T13:00:00.000Z"
+  },
+  "scopes": {
+    "pre_claim": ["api.read"],
+    "post_claim": ["api.read", "api.write"]
+  },
+  "claim": {
+    "token": "clm_abc123def456ghi789jkl012mno",
+    "expires_at": "2026-04-22T12:34:56.789Z",
+    "url": "/agent/identity/claim"
+  }
 }
 ```
 
-See [Claim Ceremony](#claim-ceremony) for the `/agent/identity/claim` init and the agent's poll loop. After a successful claim the agent re-exchanges the same `identity_assertion` at `/oauth2/token` to pick up the `post_claim_scopes`.
+See [Claim Ceremony](#claim-ceremony) for the `/agent/identity/claim` init and the agent's completion call. After a successful claim the agent re-exchanges the post-claim `identity.assertion` at `/oauth2/token` to pick up the `scopes.post_claim` set. (Anonymous registrations get no pre-minted attempt — the agent starts one at `/agent/identity/claim`.)
 
 #### type: service_auth
 
@@ -330,35 +333,34 @@ Request:
 Implementation steps:
 
 1. Create a registration row marked as `service_auth` and persist the asserted email as `claim_email`.
-2. Generate a `claim_token` (returned to the agent), a `claim_attempt_token` (embedded in `verification_uri`), and a 6-digit `user_code`. Store SHA-256 hashes of all three; return the plaintext `claim_token` and `user_code` in the response, embed the `claim_attempt_token` in the `verification_uri`.
-3. Return the claim handles + a `claim` block (see [Claim Ceremony](#claim-ceremony)) — but **no identity_assertion**. The assertion is minted when the user completes the ceremony and the agent polls `/oauth2/token` with the claim grant.
+2. Generate a `claim_token` (returned to the agent), a `claim_attempt_token` (embedded in `verification_uri`), and a 6-digit `user_code`. Store SHA-256 hashes of the tokens; keep the `user_code` to reveal on the claim page later. Return the plaintext `claim_token` and embed the `claim_attempt_token` in the `verification_uri`. **The `user_code` is never returned to the agent.**
+3. Return the claim handles + a `claim` block with the first `attempt` (see [Claim Ceremony](#claim-ceremony)) — but **no identity assertion**. The assertion is minted when the agent completes the ceremony at `/agent/identity/claim/complete`.
 
 Successful response:
 
 ```json
 {
-  "registration_id": "reg_01ABC...",
-  "registration_type": "service_auth",
-  "claim_url": "/agent/identity/claim",
-  "claim_token": "clm_abc123...",
-  "claim_token_expires": "2026-04-22T12:34:56.789Z",
-  "post_claim_scopes": ["api.read", "api.write"],
+  "id": "reg_01ABC...",
+  "type": "service_auth",
+  "scopes": { "post_claim": ["api.read", "api.write"] },
   "claim": {
-    /* user_code, verification_uri, expires_in, interval */
+    "token": "clm_abc123...",
+    "expires_at": "2026-04-22T12:34:56.789Z",
+    "url": "/agent/identity/claim",
+    "attempt": {
+      /* verification_uri, expires_at — no user_code */
+    }
   }
 }
 ```
 
 ### POST /oauth2/token
 
-The token endpoint handles two grants, dispatched on `grant_type`:
-
-- `urn:ietf:params:oauth:grant-type:jwt-bearer` — agent presents a service-signed identity_assertion in exchange for an access_token. See below.
-- `urn:workos:agent-auth:grant-type:claim` — agent polls during the claim ceremony. See [Claim Ceremony → Agent poll](#post-oauth2token-claim-grant--agent-poll).
+The token endpoint handles a single grant, `urn:ietf:params:oauth:grant-type:jwt-bearer` — the agent presents a service-signed identity assertion in exchange for an access_token. The claim ceremony does **not** run through this endpoint; the agent completes it at [`/agent/identity/claim/complete`](#post-agentidentityclaimcomplete--agent-completion) and gets a refresh token for the assertion-refresh path.
 
 #### JWT-bearer grant (RFC 7523)
 
-The agent presents the service-signed identity_assertion to exchange it for an access_token. Standard [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) JWT-bearer grant, form-encoded:
+The agent presents the service-signed identity assertion to exchange it for an access_token. Standard [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) JWT-bearer grant, form-encoded:
 
 ```
 POST /oauth2/token HTTP/1.1
@@ -372,7 +374,7 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer
 
 Implementation steps:
 
-1. **Parse the form-encoded body.** Validate `grant_type`; route to this handler. If the value is something else (and not the claim grant), return `unsupported_grant_type`.
+1. **Parse the form-encoded body.** Validate `grant_type`; route to this handler. Any other value returns `unsupported_grant_type`.
 2. **Verify the `assertion`** against your service's signing key. It must be `typ: "oauth-id-jag+jwt"`, with `iss` and `aud` equal to your AS, a valid `exp`, and a `sub` resolving to a registration in your store.
 3. **Look up the registration by `sub`.** If absent or expired, return `invalid_grant`.
 4. **Issue an access_token** scoped per the registration's state. Anonymous-unclaimed gets your configured pre-claim scopes; everything else gets the registration's full granted set.
@@ -388,7 +390,7 @@ Successful response (standard OAuth shape per RFC 6749 §5.1):
 }
 ```
 
-The token endpoint should never issue a `refresh_token`. The same `identity_assertion` can be re-exchanged at `/oauth2/token` to refresh the access_token until the assertion itself expires.
+The token endpoint should never issue a `refresh_token`. The same `identity.assertion` can be re-exchanged at `/oauth2/token` to refresh the access_token until the assertion itself expires; when the assertion expires, service_auth and claimed registrations mint a fresh one via [`/agent/identity` `type: refresh`](#assertion-refresh) (anonymous-pre-claim and id_jag re-register).
 
 Error response uses standard OAuth error codes (RFC 6749 §5.2):
 
@@ -396,7 +398,7 @@ Error response uses standard OAuth error codes (RFC 6749 §5.2):
 { "error": "invalid_grant", "error_description": "..." }
 ```
 
-Supported error codes: `invalid_request`, `invalid_grant`, `unsupported_grant_type` (plus the claim grant's `authorization_pending`, `slow_down`, `expired_token` from [its handler](#post-oauth2token-claim-grant--agent-poll)).
+Supported error codes: `invalid_request`, `invalid_grant`, `unsupported_grant_type`.
 
 ### POST /oauth2/revoke — RFC 7009 token revocation
 
@@ -444,131 +446,118 @@ Reject ID-JAGs with neither a verified email nor a verified phone — there's no
 
 ### Claim Ceremony
 
-Both `anonymous` and `service_auth` flows funnel into the same ceremony: the service mints a `user_code`, the agent surfaces it to the user along with a `verification_uri`, the user signs in to the service and types the code on a service-owned form, the agent polls for completion. The ceremony fields (`user_code`, `verification_uri`, `expires_in`, `interval`) borrow from [RFC 8628 device authorization](https://datatracker.ietf.org/doc/html/rfc8628), and polling happens at the standard `token_endpoint` with a profile-specific grant (`urn:workos:agent-auth:grant-type:claim`).
+Both `anonymous` and `service_auth` flows funnel into the same ceremony, and it's always the **service_auth** method (anonymous registrations are claimed via service_auth too): the agent hands the user a `verification_uri` (no code), the user signs in to the service and confirms on a service-owned page, the page **reveals** a `user_code`, the user reads it back to the agent, and the agent submits it at `/agent/identity/claim/complete`. The ceremony fields (`user_code`, `verification_uri`) borrow their shape from [RFC 8628 device authorization](https://datatracker.ietf.org/doc/html/rfc8628), but the code travels service → user → agent, so there is no polling grant and no `interval`.
 
+| Flow         | First attempt minted at                           | claim/complete returns                                                                                 |
+| ------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Anonymous    | `/agent/identity/claim` (agent starts it)         | Post-claim identity: a **v2** `identity.assertion` (the v1 was pre-claim) + a rotating `refresh_token` |
+| service_auth | `/agent/identity` (bundled under `claim.attempt`) | The first `identity.assertion` (none was issued at registration time) + a rotating `refresh_token`     |
 
-**Why a profile-specific grant URN.** Polling could in principle reuse `urn:ietf:params:oauth:grant-type:device_code`, but a service implementing standard RFC 8628 device authorization at the same token endpoint would then have to disambiguate by inspecting the bearer value (claim_token vs device_code). A custom URN routes by grant_type, which is where OAuth implementations already dispatch — no collision risk.
+#### Attempt block shape
 
-| Flow           | Ceremony block returned at                | Claim grant returns                                                                                             |
-| -------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Anonymous      | `/agent/identity/claim` (`claim_attempt`) | Standard OAuth token response + a **v2** identity_assertion (the v1 was pre-claim; v2 carries the user's email) |
-| Verified-email | `/agent/identity` (`claim`)               | Standard OAuth token response + the first identity_assertion (none was issued at registration time)             |
-
-#### Ceremony block shape
-
-Returned nested under `claim` (service_auth registration response) or `claim_attempt` (anonymous `/claim` response):
+Returned nested under `claim.attempt` (service_auth registration response) or `attempt` (the `/agent/identity/claim` response):
 
 ```json
 {
-  "user_code": "123456",
-  "expires_in": 600,
   "verification_uri": "https://auth.service.example.com/login?return_to=%2Fclaim%3Fclaim_attempt_token%3D...",
-  "interval": 5
+  "expires_at": "2026-05-04T12:10:00.000Z"
 }
 ```
 
-The `verification_uri` routes through `/login` first so the user authenticates before landing on the claim page. `claim_attempt_token` (in the return_to path) binds the URL to a specific registration — opening the URL identifies the registration without revealing the `user_code`.
+The `verification_uri` routes through `/login` first so the user authenticates before landing on the claim page. `claim_attempt_token` (in the return_to path) binds the URL to a specific registration — opening it identifies the registration without carrying the `user_code`, which the service reveals only after the user confirms. **The `user_code` is never in this block.**
 
-#### POST /agent/identity/claim — Anonymous claim entry
+#### POST /agent/identity/claim — Start (or re-mint) an attempt
 
-Anonymous-only. Verified-email registrations skip this — their `claim` block is bundled into the `/agent/identity` registration response.
+For **anonymous**, the agent calls this to start the first attempt. For **service_auth**, the first attempt is bundled into the registration response; the agent calls this only to re-mint after a `user_code` expires. Either way, `type` is `service_auth` — the claim method.
 
 Request:
 
 ```json
 {
+  "type": "service_auth",
   "claim_token": "clm_abc123...",
-  "email": "user@example.com"
+  "login_hint": "user@example.com"
 }
 ```
 
-The `email` binds the registration to the human the agent is acting for. Only that signed-in user can complete the ceremony — without this binding, a third party who intercepts the `user_code` could claim the agent on their own account.
+The `login_hint` binds the attempt to the human the agent is acting for. Only that signed-in user can complete the ceremony — without this binding, a third party who intercepts the link could claim the agent on their own account.
 
 Response (200):
 
 ```json
 {
-  "registration_id": "reg_01ABC...",
-  "claim_attempt_id": "cla_01XYZ...",
-  "status": "initiated",
-  "expires_at": "2026-05-04T12:10:00.000Z",
-  "claim_attempt": {
-    /* claim_attempt fields, see above */
+  "id": "reg_01ABC...",
+  "type": "service_auth",
+  "attempt": {
+    /* verification_uri, expires_at — see above */
   }
 }
 ```
 
-`claim_attempt_id` identifies the current claim attempt. A new identifier is minted each time a fresh attempt is initiated — including same-email retries; the previous URL stops working.
-
 Implementation notes:
 
-- Hash the incoming `claim_token` and look up the registration. Reject if not found (`invalid_claim_token`), already claimed (`claimed_or_in_flight`), or expired (`claim_expired`).
-- Record `claim_email` on the registration so the claim page can enforce the binding.
-- Mint a `claim_attempt_token` and a `user_code`; store SHA-256 hashes of both, return the plaintexts.
+- Hash the incoming `claim_token` and look up the registration. Reject if not found (`invalid_claim_token`), already claimed (`already_claimed`), or expired (`claim_expired`).
+- Record the `login_hint` on the attempt so the claim page can enforce the binding.
+- Mint a `claim_attempt_token` and a `user_code`; store the token hash and hold the `user_code` to reveal on the claim page. Return only the `verification_uri` (with the token embedded).
 - The `verification_uri` should route through your sign-in flow first (so the user authenticates before the claim page can identify them).
 
-#### User-facing claim form
+#### User-facing claim page
 
 The user opens `verification_uri`, signs in to the service, and lands on a page that:
 
 1. Resolves the registration via `claim_attempt_token` (from the URL).
-2. Verifies the signed-in user matches `registration.claim_email` if set — rejects mismatches.
-3. Renders a form that POSTs `claim_attempt_token` + the typed `user_code` to a service-owned form-action endpoint.
-4. On the form post, the service verifies the `user_code` against the registration's stored hash and marks the claim complete. Same-account check applies again on submit.
+2. Verifies the signed-in user matches the attempt's `login_hint` if set — rejects mismatches (`wrong_account`).
+3. Renders a **confirm** button (no code input). On confirm, the service binds the confirming user to the attempt and **reveals the `user_code`** for the user to read back to the agent.
 
-This is a service-owned UX surface — agents never see it.
+This is a service-owned UX surface — agents never see it. The confirm POST is a service-internal form action (`/claim/confirm` in the sample), distinct from the agent-facing `/agent/identity/claim/complete`.
 
-#### POST /oauth2/token (claim grant) — Agent poll
+#### POST /agent/identity/claim/complete — Agent completion
 
-Polling happens at the standard `token_endpoint` with a profile-specific grant. Form-encoded, as with the JWT-bearer grant:
+The agent submits its `claim_token` plus the `user_code` the user read back:
 
 ```
-POST /oauth2/token HTTP/1.1
+POST /agent/identity/claim/complete HTTP/1.1
 Host: auth.service.example.com
-Content-Type: application/x-www-form-urlencoded
+Content-Type: application/json
 
-grant_type=urn:workos:agent-auth:grant-type:claim
-&claim_token=<clm_...>
+{ "claim_token": "clm_...", "user_code": "123456" }
 ```
 
-While the user has not completed the ceremony (RFC 8628 §3.5 vocabulary, served via the standard OAuth error envelope):
+On success — a one-shot response carrying the post-claim identity (the assertion and a rotating refresh token):
 
 ```json
 {
-  "error": "authorization_pending",
-  "error_description": "The user has not yet completed the ceremony."
-}
-```
-
-On completion: a standard OAuth token response, extended with `identity_assertion` and `assertion_expires`:
-
-```json
-{
-  "access_token": "<post-claim access_token>",
-  "token_type": "Bearer",
-  "expires_in": 3600,
-  "scope": "api.read api.write",
-  "identity_assertion": "<service-signed JWT>",
-  "assertion_expires": "2026-05-04T13:00:00.000Z"
-}
-```
-
-When the ceremony window has closed:
-
-```json
-{
-  "error": "expired_token",
-  "error_description": "The claim ceremony window has closed."
+  "id": "reg_01ABC...",
+  "status": "claimed",
+  "identity": {
+    "assertion": "<service-signed JWT>",
+    "expires_at": "2026-05-04T13:00:00.000Z",
+    "refresh_token": {
+      "value": "art_...",
+      "expires_at": "2026-06-03T12:00:00.000Z"
+    }
+  }
 }
 ```
 
 Implementation notes:
 
-- Look up the registration by `sha256(claim_token)`. If absent → `expired_token`. If `status === "expired"` → `expired_token`. If `status !== "claimed"` → `authorization_pending`. If claimed → mint a fresh access_token and a fresh identity_assertion.
-- For **anonymous**, on completion the pre-claim access_tokens (from earlier jwt-bearer exchanges) should be **revoked** — the canonical credential is the one returned here. The v2 identity_assertion includes the now-known `email` / `email_verified` claims; the v1 the agent held has neither.
-- For **service_auth**, this is the first time an identity_assertion exists for this registration — the agent uses it for jwt-bearer refreshes once the returned access_token expires.
-- Honor RFC 8628's `interval` — return `{ "error": "slow_down" }` if the agent polls faster than advertised.
+- Look up the registration by `sha256(claim_token)`. If absent → `invalid_claim`.
+- If the attempt hasn't been confirmed by a signed-in user yet → `claim_not_confirmed` (409). The agent waits and retries.
+- If the submitted `user_code` doesn't match → `invalid_user_code` (401). If the code's window has closed → `user_code_expired` (410); the agent re-mints via `/agent/identity/claim`. If already claimed → `already_claimed` (409); if the outer window closed → `claim_expired` (410).
+- On success, bind the registration to the confirming user, mint the identity assertion (with the user's `email` / `email_verified`) and a rotating `refresh_token`, and return them once.
+- For **anonymous**, revoke the pre-claim access_tokens (from earlier jwt-bearer exchanges) — the canonical credential is minted by re-exchanging the post-claim assertion. The v2 assertion carries the now-known `email` claims; the v1 didn't.
 - Emit `claim.confirmed` (see [Recommended Audit Events](#recommended-audit-events)).
+
+#### Assertion refresh
+
+service_auth and claimed registrations hold a rotating `refresh_token` (returned by claim/complete). When the assertion nears expiry, the agent exchanges it for a fresh one at `/agent/identity`:
+
+```json
+{ "type": "refresh", "refresh_token": "art_..." }
+```
+
+The response is a registration envelope with a fresh `identity.assertion` and a new `refresh_token` (the presented one is spent). Reject a missing, expired, or already-spent token with `invalid_refresh_token`. Anonymous pre-claim and id_jag registrations have no refresh token — they re-exchange the still-valid assertion, or re-register.
 
 ### Revocation
 
@@ -625,17 +614,18 @@ Use a sliding-window counter backed by a shared store (Redis is common). Fail op
 
 Record the following state transitions for observability and incident response. How they're exposed — audit log, webhook, SIEM stream, admin API — is an implementation choice; the set of events and the data they carry is the useful baseline.
 
-| Event                  | When                                                        | Recommended fields                      |
-| ---------------------- | ----------------------------------------------------------- | --------------------------------------- |
-| `registration.created` | Any successful `/agent/identity` POST                       | `registration_id`, `registration_type`  |
-| `assertion.issued`     | A service-signed identity_assertion is minted               | `registration_id`                       |
-| `token.issued`         | `/oauth2/token` returns an access_token                     | `registration_id`, `scope`              |
-| `token.revoked`        | `/oauth2/revoke` invalidates a credential                   | `registration_id`                       |
-| `claim.requested`      | `/agent/identity/claim` called (or implicit on service_auth)       | `registration_id`, `email`              |
-| `user_code.minted`     | user_code minted at ceremony start                          | `registration_id`                       |
-| `claim.confirmed`      | `/agent/identity/claim/complete` succeeds                   | `registration_id`, `claimed_by_user_id` |
-| `registration.expired` | Unclaimed registration past its TTL                         | `registration_id`                       |
-| `registration.revoked` | SET processed at `/agent/event/notify`                      | `registration_id`, `iss`, `sub`         |
+| Event                  | When                                                         | Recommended fields                        |
+| ---------------------- | ------------------------------------------------------------ | ----------------------------------------- |
+| `registration.created` | Any successful `/agent/identity` POST                        | `registration_id`, `type`                 |
+| `assertion.issued`     | A service-signed identity assertion is minted                | `registration_id`                         |
+| `token.issued`         | `/oauth2/token` returns an access_token                      | `registration_id`, `scope`                |
+| `token.revoked`        | `/oauth2/revoke` invalidates a credential                    | `registration_id`                         |
+| `claim.requested`      | `/agent/identity/claim` called (or implicit on service_auth) | `registration_id`, `login_hint`           |
+| `user_code.revealed`   | user_code revealed to the confirming user on the claim page  | `registration_id`, `confirmed_by_user_id` |
+| `claim.confirmed`      | `/agent/identity/claim/complete` succeeds                    | `registration_id`, `claimed_by_user_id`   |
+| `assertion.refreshed`  | `/agent/identity` (`type: refresh`) rotates the assertion    | `registration_id`                         |
+| `registration.expired` | Unclaimed registration past its TTL                          | `registration_id`                         |
+| `registration.revoked` | SET processed at `/agent/event/notify`                       | `registration_id`, `iss`, `sub`           |
 
 For ID-JAG flows, include `iss`, `sub`, `agent_platform`, and `agent_context_id` so operators can correlate with provider-side logs.
 
@@ -643,10 +633,12 @@ Services that already expose resource events (for API keys, invitations, members
 
 ## Security Considerations
 
-- **Token hashing.** The `claim_token`, `claim_attempt_token`, and `user_code` are all bearer secrets with no proof of possession — store only SHA-256 hashes. Plaintext leaves the server exactly once: claim_token + user_code in the ceremony response to the agent, claim_attempt_token inside the `verification_uri` query string.
-- **user_code entropy + TTL.** Use a CSPRNG (`crypto.randomInt`) for the `user_code`. Default to a short TTL (≤10 min) and tight per-claim retry limits at the `/claim` form-action — 6-digit codes are guess-bounded only by lockout, not entropy.
-- **IP logging.** Capture IPs at registration, claim, and complete for audit trail.
-- **Scope on /claim and /complete.** Both endpoints are public but must resolve to a tenant / environment, and reject tokens that don't belong to that scope even if the hash somehow collides.
+- **Token hashing.** The `claim_token` and `claim_attempt_token` are bearer secrets with no proof of possession — store only SHA-256 hashes. The `user_code` is held server-side and revealed on the claim page only after the user confirms. Plaintext leaves the server as: `claim_token` in the registration response to the agent, `claim_attempt_token` inside the `verification_uri` query string, and `user_code` on the claim page to the confirmed user (who relays it back to the agent). The agent submits `claim_token` + `user_code` at claim/complete.
+- **user_code entropy + TTL.** Use a CSPRNG (`crypto.randomInt`) for the `user_code`. Default to a short TTL (≤10 min) and tight per-registration retry limits at `/agent/identity/claim/complete` — 6-digit codes are guess-bounded only by lockout, not entropy. Requiring the attempt to be confirmed by a signed-in user before any code is accepted removes the pre-confirmation guessing window entirely.
+- **Confirm before reveal.** Only reveal the `user_code` after the signed-in user matches the attempt's `login_hint` and confirms. This is what binds the ceremony to the intended human — an intercepted `verification_uri` lands a third party on a page that won't reveal a code for someone else's `login_hint`.
+- **IP logging.** Capture IPs at registration, claim start, confirm, and complete for audit trail.
+- **Scope on claim endpoints.** The claim, confirm, and complete endpoints must resolve to a tenant / environment, and reject tokens that don't belong to that scope even if the hash somehow collides.
+- **Refresh-token rotation.** Rotate the `refresh_token` on every exchange and reject a presented-but-spent token (a reuse signal). Store only its hash.
 - **Key reuse across the claim boundary.** For anonymous, the in-place permission swap means anyone who captured the API key pre-claim retains access post-claim with the new scopes. Offer forced rotation as an opt-in for security-sensitive tenants.
 - **Bulk revocation.** Provide an operator-facing mechanism to revoke all outstanding agent credentials for a tenant in one shot — for incident response.
 - **Assertion replay.** Cache `jti` values for at least the assertion lifetime plus clock skew. A shared store is required if `/agent/identity` runs across multiple replicas.

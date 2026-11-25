@@ -32,7 +32,7 @@ sequenceDiagram
     Agent->>Service: POST /agent/identity<br/>{ type: identity_assertion, assertion: ID-JAG }
     Service->>Provider: GET /.well-known/jwks.json
     Provider-->>Service: 200 OK (JSON Web Key Set)
-    Service-->>Agent: 200 OK (identity_assertion)
+    Service-->>Agent: 200 OK (identity.assertion)
 
     Agent->>Service: POST /oauth2/token<br/>grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=...
     Service-->>Agent: 200 OK (access_token)
@@ -75,17 +75,18 @@ Discovery is two-hop:
      "issuer": "https://auth.service.example.com",
      "token_endpoint": "https://auth.service.example.com/oauth2/token",
      "revocation_endpoint": "https://auth.service.example.com/oauth2/revoke",
-     "grant_types_supported": [
-       "urn:ietf:params:oauth:grant-type:jwt-bearer",
-       "urn:workos:agent-auth:grant-type:claim"
-     ],
+     "grant_types_supported": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
 
      "agent_auth": {
        "skill": "https://service.example.com/auth.md",
        "identity_endpoint": "https://auth.service.example.com/agent/identity",
        "claim_endpoint": "https://auth.service.example.com/agent/identity/claim",
        "events_endpoint": "https://auth.service.example.com/agent/event/notify",
-       "identity_types_supported": ["anonymous", "identity_assertion", "service_auth"],
+       "identity_types_supported": [
+         "anonymous",
+         "identity_assertion",
+         "service_auth"
+       ],
        "identity_assertion": {
          "assertion_types_supported": [
            "urn:ietf:params:oauth:token-type:id-jag"
@@ -175,14 +176,16 @@ Content-Type: application/json
 }
 ```
 
-200 response — the service verified the ID-JAG, found or JIT-provisioned the user, and minted a service-signed `identity_assertion`:
+200 response — the service verified the ID-JAG, found or JIT-provisioned the user, and minted a service-signed identity assertion under `identity.assertion`:
 
 ```json
 {
-  "registration_id": "reg_...",
-  "registration_type": "identity_assertion",
-  "identity_assertion": "<service-signed JWT>",
-  "assertion_expires": "2026-05-04T13:00:00.000Z",
+  "id": "reg_...",
+  "type": "identity_assertion",
+  "identity": {
+    "assertion": "<service-signed JWT>",
+    "expires_at": "2026-05-04T13:00:00.000Z"
+  },
   "scopes": ["api.read", "api.write"]
 }
 ```
@@ -195,7 +198,7 @@ Host: auth.service.example.com
 Content-Type: application/x-www-form-urlencoded
 
 grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer
-&assertion=<service-signed identity_assertion>
+&assertion=<service-signed identity assertion>
 &resource=https://api.service.example.com/
 ```
 

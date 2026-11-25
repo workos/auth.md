@@ -27,6 +27,13 @@ export const config = Object.freeze({
    * within this window; when it expires, the agent re-calls /agent/identity.
    */
   serviceAssertionTtlSeconds: 3600,
+  /**
+   * Lifetime of the rotating refresh token issued to service_auth and claimed
+   * registrations at claim/complete. Longer than the assertion — it's how the
+   * agent mints a fresh assertion once the current one expires, via
+   * /agent/identity (type: refresh).
+   */
+  refreshTokenTtlSeconds: 30 * 86400,
   anonymousTtlSeconds: 86400,
   /**
    * Maximum age of the upstream user authentication carried in an ID-JAG's
@@ -36,10 +43,8 @@ export const config = Object.freeze({
    */
   idJagMaxAuthAgeSeconds: 3600,
   claimViewTokenTtlSeconds: 600,
-  /** Lifetime of the user_code minted at ceremony start (RFC 8628). */
+  /** Lifetime of the user_code revealed on the claim page (RFC 8628 shape). */
   userCodeTtlSeconds: 600,
-  /** Recommended agent poll cadence (RFC 8628 `interval`). */
-  pollIntervalSeconds: 5,
   /** Lifetime of the cookie-bound session minted at /login. */
   sessionTtlSeconds: 86400,
   /**

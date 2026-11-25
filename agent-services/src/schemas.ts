@@ -17,15 +17,42 @@ const anonymousBody = z.object({
   type: z.literal("anonymous"),
 });
 
+/**
+ * Exchanges a rotating refresh token (issued to service_auth and claimed
+ * registrations at claim/complete) for a fresh identity assertion. Anonymous
+ * pre-claim and id_jag registrations have no refresh token — they re-exchange
+ * the assertion or re-register instead.
+ */
+const refreshBody = z.object({
+  type: z.literal("refresh"),
+  refresh_token: z.string().min(1),
+});
+
 export const agentAuthBody = z.union([
   idJagAssertionBody,
   serviceAuthBody,
   anonymousBody,
+  refreshBody,
 ]);
 
+/**
+ * Starts (or re-mints) a claim attempt. `type` is the claim method, not the
+ * registration kind — anonymous registrations are claimed via `service_auth`
+ * too. The `login_hint` binds the attempt to the human who may complete it.
+ */
 export const claimBody = z.object({
+  type: z.literal("service_auth"),
   claim_token: z.string().min(1),
-  email: z.email(),
+  login_hint: z.email(),
+});
+
+/**
+ * Agent-facing claim completion. The agent presents its claim token plus the
+ * user_code the confirming human read off the claim page and relayed back.
+ */
+export const claimCompleteBody = z.object({
+  claim_token: z.string().min(1),
+  user_code: z.string().regex(/^\d{6}$/, "user_code must be a 6-digit code"),
 });
 
 /** Mock IdP sign-in form. */
@@ -34,10 +61,13 @@ export const loginFormBody = z.object({
   return_to: z.string().optional(),
 });
 
-/** User-facing claim form. */
-export const claimFormBody = z.object({
+/**
+ * User-facing claim confirmation form. The signed-in human confirms; the page
+ * then reveals the user_code for them to read back to the agent. No code is
+ * typed here — it travels service → user → agent, not the other way.
+ */
+export const claimConfirmFormBody = z.object({
   claim_attempt_token: z.string().min(1),
-  user_code: z.string().regex(/^\d{6}$/, "user_code must be a 6-digit code"),
 });
 
 /**
@@ -50,17 +80,6 @@ export const jwtBearerGrantBody = z.object({
   grant_type: z.literal("urn:ietf:params:oauth:grant-type:jwt-bearer"),
   assertion: z.string().min(1),
   resource: z.string().url().optional(),
-});
-
-/**
- * Profile-specific grant for claim-ceremony polling. Device-authorization-
- * shaped (RFC 8628 §3.4 semantics) but uses our own grant URN so it doesn't
- * collide with services that also implement standard device auth. The
- * `claim_token` from the registration response is the polling bearer.
- */
-export const claimGrantBody = z.object({
-  grant_type: z.literal("urn:workos:agent-auth:grant-type:claim"),
-  claim_token: z.string().min(1),
 });
 
 /** RFC 7009 token revocation. */
