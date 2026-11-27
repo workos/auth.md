@@ -1,0 +1,272 @@
+:root {
+  --brand-primary: #6D6DF2;
+  --brand-primary-hover: #5252D9;
+  --brand-success: #3FF1C7;
+  --brand-success-hover: #2DD8AF;
+  --brand-text: #030527;
+  --brand-bg: #FFFFFF;
+  --track-email: #f6b93b;
+  --track-email-hover: #e0a52e;
+  --error: #e55039;
+  --error-bg: #fde9e6;
+  --muted: rgba(3, 5, 39, .65);
+  --muted-2: rgba(3, 5, 39, .5);
+  --border: rgba(3, 5, 39, .12);
+  --surface-soft: rgba(3, 5, 39, .04);
+  --note-bg: rgba(109, 109, 242, .08);
+  --note-border: rgba(109, 109, 242, .25);
+  --warn-bg: rgba(245, 158, 11, .08);
+  --warn-border: rgba(245, 158, 11, .35);
+  --warn-text: #8a5a00;
+}
+
+* { box-sizing: border-box; }
+
+/* Base layout — page widths set by per-page body class below. */
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  margin: 4rem auto;
+  padding: 0 1.5rem;
+  line-height: 1.5;
+  color: var(--brand-text);
+  background: var(--brand-bg);
+}
+body.page-login { max-width: 28rem; }
+body.page-claim { max-width: 32rem; }
+body.page-home  { max-width: 100rem; margin-top: 2rem; }
+
+/* Headings */
+h1 { margin-bottom: .25rem; }
+body.page-claim h1 { color: var(--brand-primary); }
+body.page-claim.variant-error h1 { color: var(--error); }
+h2 { margin-top: 0; font-size: 1.1rem; }
+h2 .num {
+  display: inline-block;
+  width: 1.6rem;
+  height: 1.6rem;
+  line-height: 1.6rem;
+  text-align: center;
+  background: var(--brand-primary);
+  color: white;
+  border-radius: 50%;
+  font-size: .85rem;
+  margin-right: .5rem;
+  vertical-align: 1px;
+}
+
+/* Body text */
+p { color: var(--muted); }
+.sub { color: var(--muted); margin-top: 0; }
+.sub a { color: var(--brand-primary); }
+code { background: var(--surface-soft); padding: .05rem .3rem; border-radius: .2rem; font-size: .9em; }
+
+/* Forms */
+form { margin-top: 1.5rem; display: flex; flex-direction: column; gap: .75rem; }
+label { font-size: .85rem; font-weight: 600; }
+body.page-home label { display: block; margin-top: .5rem; font-weight: 400; color: var(--muted); }
+body.page-home label input,
+body.page-home label select,
+body.page-home label textarea { display: block; margin-top: .2rem; }
+input, select, textarea {
+  font-family: inherit;
+  color: var(--brand-text);
+  background: var(--brand-bg);
+  border: 1px solid var(--border);
+  border-radius: .35rem;
+}
+body.page-login input,
+body.page-login select { width: 100%; padding: .55rem .65rem; font-size: 1rem; }
+body.page-claim input {
+  width: 100%;
+  padding: .65rem .75rem;
+  font-size: 1.4rem;
+  letter-spacing: .35rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: center;
+}
+body.page-home input,
+body.page-home select,
+body.page-home textarea {
+  font-size: .95rem;
+  padding: .3rem .5rem;
+  border-radius: .3rem;
+}
+body.page-home input { width: 100%; max-width: 28rem; }
+body.page-home input.otp {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 1.2rem;
+  letter-spacing: .25rem;
+  max-width: 12rem;
+}
+body.page-home textarea {
+  width: 100%;
+  min-height: 5rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .78rem;
+}
+
+/* Buttons */
+button {
+  background: var(--brand-primary);
+  color: white;
+  border: none;
+  border-radius: .35rem;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+}
+body.page-login button { padding: .65rem 1rem; }
+body.page-claim button { padding: .7rem 1rem; }
+button:hover { filter: brightness(1.08); }
+
+/* Home demo overrides the button defaults heavily. */
+body.page-home button {
+  font-size: .95rem;
+  padding: .4rem .9rem;
+  margin: .25rem .4rem .25rem 0;
+  border-radius: .3rem;
+  border: 1px solid var(--border);
+  background: var(--brand-bg);
+  color: var(--brand-text);
+  font-weight: normal;
+}
+body.page-home button:hover { filter: none; border-color: var(--brand-primary); }
+body.page-home button:disabled { opacity: .5; cursor: not-allowed; }
+body.page-home button.primary {
+  background: var(--brand-primary);
+  color: white;
+  border-color: var(--brand-primary);
+}
+body.page-home button.primary:hover { background: var(--brand-primary-hover); border-color: var(--brand-primary-hover); }
+body.page-home .track-anon button.primary {
+  background: var(--brand-success);
+  border-color: var(--brand-success);
+  color: var(--brand-text);
+}
+body.page-home .track-anon button.primary:hover {
+  background: var(--brand-success-hover);
+  border-color: var(--brand-success-hover);
+}
+body.page-home .track-email button.primary {
+  background: var(--track-email);
+  border-color: var(--track-email);
+  color: var(--brand-text);
+}
+body.page-home .track-email button.primary:hover {
+  background: var(--track-email-hover);
+  border-color: var(--track-email-hover);
+}
+
+/* Inline error / warning callouts */
+.err {
+  color: var(--error);
+  background: rgba(229, 80, 57, .08);
+  border: 1px solid rgba(229, 80, 57, .35);
+  padding: .5rem .75rem;
+  border-radius: .35rem;
+  font-size: .85rem;
+}
+body.page-claim .err { margin: 0; }
+.warn {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-text);
+  padding: .6rem .8rem;
+  border-radius: .35rem;
+  font-size: .8rem;
+  margin-top: 1rem;
+}
+.advisory {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-text);
+  padding: .65rem .8rem;
+  border-radius: .35rem;
+  font-size: .85rem;
+  margin: .5rem 0;
+}
+.advisory + .advisory { margin-top: .4rem; }
+
+/* Login page — seeded users hint */
+.seed { margin-top: .5rem; font-size: .8rem; color: var(--muted); }
+.seed code { background: var(--surface-soft); padding: .05rem .3rem; border-radius: .2rem; }
+
+/* Home page — interactive demo layout */
+.full { max-width: 52rem; margin: 0 auto; }
+.tracks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+  margin-top: 1rem;
+}
+.tracks .track-header { margin: 0 0 .5rem; }
+.tracks section { margin: 0 0 1rem; }
+@media (max-width: 80rem) {
+  .tracks { grid-template-columns: 1fr; }
+}
+section {
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+  background: var(--brand-bg);
+}
+section[hidden] { display: none; }
+section.active { border-color: var(--brand-primary); box-shadow: 0 0 0 3px rgba(109, 109, 242, .15); }
+section.track-anon.active { border-color: var(--brand-success); box-shadow: 0 0 0 3px rgba(63, 241, 199, .2); }
+section.track-anon h2 .num { background: var(--brand-success); color: var(--brand-text); }
+section.track-email.active { border-color: var(--track-email); box-shadow: 0 0 0 3px rgba(246, 185, 59, .18); }
+section.track-email h2 .num { background: var(--track-email); color: var(--brand-text); }
+.label {
+  display: inline-block;
+  font-size: .7rem;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .05em;
+  margin: .5rem 0 .25rem;
+}
+.req, .res {
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: .3rem;
+  padding: .6rem .75rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .78rem;
+  overflow-x: auto;
+}
+.req { border-left: 3px solid var(--brand-primary); }
+.res { border-left: 3px solid var(--brand-success); }
+.res.error { border-left-color: var(--error); background: var(--error-bg); }
+pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+.reset { float: right; }
+.badge {
+  display: inline-block;
+  font-size: .7rem;
+  padding: .1rem .4rem;
+  border-radius: .25rem;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  margin-left: .3rem;
+}
+.done .num { background: var(--brand-success); color: var(--brand-text); }
+.track-header {
+  margin: 2rem 0 0;
+  font-weight: 600;
+  font-size: .9rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.track-header.anon { color: var(--brand-success-hover); }
+.track-header.email { color: var(--track-email-hover); }
+.track-header.ia { color: var(--brand-primary); }
+.note {
+  font-size: .85rem;
+  color: var(--brand-text);
+  background: var(--note-bg);
+  border: 1px solid var(--note-border);
+  padding: .5rem .75rem;
+  border-radius: .3rem;
+}

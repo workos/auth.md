@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title><%= title %></title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="page-claim variant-<%= variant %>">
+<h1><%= title %></h1>
+
+<% if (variant === "form" || variant === "form-error") { %>
+  <% if (provider) { %>
+    <p>You're signed in as <code><%= userEmail %></code>. <strong><%= provider %></strong> is asking to link this account so an agent running there can act on your behalf. Enter the 6-digit code your agent showed you to confirm.</p>
+  <% } else { %>
+    <p>You're signed in as <code><%= userEmail %></code>. The agent should have shown you a 6-digit code — enter it below to authorize it to act on your behalf.</p>
+  <% } %>
+
+  <% (advisories || []).forEach(function(a) { %>
+    <div class="advisory"><%- a %></div>
+  <% }) %>
+
+  <form method="POST" action="<%= completeUrl %>">
+    <input type="hidden" name="claim_attempt_token" value="<%= claimAttemptToken %>">
+    <label>
+      6-digit code
+      <input type="text" name="user_code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="000000" required autofocus>
+    </label>
+    <% if (formError) { %>
+      <p class="err"><%= formError %></p>
+    <% } %>
+    <button type="submit">Authorize agent</button>
+  </form>
+  <p class="warn">Only enter a code from an agent you trust. Pasting a code from an untrusted source could let that agent act on your behalf.</p>
+
+<% } else if (variant === "wrong-account") { %>
+  <p>This claim was started for <code><%= claimEmail %></code>. You're signed in as <code><%= userEmail %></code>. Sign out and sign back in with the right account.</p>
+
+<% } else { %>
+  <%# done | error — generic single-paragraph message %>
+  <p><%= message %></p>
+<% } %>
+</body></html>
